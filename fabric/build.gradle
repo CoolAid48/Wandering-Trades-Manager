@@ -27,13 +27,11 @@ configurations {
 repositories {
     mavenCentral()
     maven { url = "https://maven.terraformersmc.com/releases" }
-    maven { url = "https://maven.isxander.dev/releases" }
 }
 
 dependencies {
     implementation "net.fabricmc:fabric-loader:$rootProject.fabric_loader_version"
     implementation "net.fabricmc.fabric-api:fabric-api:$rootProject.fabric_api_version"
-    implementation "dev.isxander:yet-another-config-lib:${project.yacl_fabric_version}"
     implementation "com.terraformersmc:modmenu:$rootProject.modmenu_version"
     include "com.terraformersmc:modmenu:$rootProject.modmenu_version"
 

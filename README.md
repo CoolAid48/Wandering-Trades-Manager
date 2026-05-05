@@ -1,9 +1,9 @@
-# Optical
+# CoolAid's Wandering Trades Manager
 ![](https://img.shields.io/badge/Loaders-Fabric/Quilt/NeoForge-orange?style=for-the-badge)
 ![](https://img.shields.io/badge/Versions-26.1.x-orange?style=for-the-badge)
 ![](https://img.shields.io/badge/Environments-Client_+_Server-orange?style=for-the-badge)
 
-### Adds a robust config screen for easier management of your Wandering Trades datapack from Vanilla Tweaks!
+### Adds a robust config screen for easier management of your Wandering Trades datapack from Vanilla Tweaks! Check out Vanilla Tweaks: https://vanillatweaks.net/
 
 ## More Details Below:
 - **Coming Soon™**

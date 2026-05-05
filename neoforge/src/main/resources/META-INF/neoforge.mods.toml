@@ -1,0 +1,18 @@
+modLoader = "javafml"
+loaderVersion = "[2,)"
+issueTrackerURL = "https://github.com/CoolAid48/Wandering-Trades-Manager/issues"
+license = "MIT"
+
+[[mods]]
+modId = "wanderingtradesmanager"
+version = "${version}"
+displayName = "Wandering Trades Manager"
+authors = "CoolAid48"
+credits = "Vanilla Tweaks Team, Jeremiah Scottie"
+description = '''
+Adds a robust config screen for easier management of your Wandering Trades datapack from Vanilla Tweaks
+'''
+#logoFile = ""
+
+[[mixins]]
+config = "wandering-trades-manager.mixins.json"

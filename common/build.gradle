@@ -1,0 +1,15 @@
+architectury {
+    common rootProject.enabled_platforms.split(',')
+}
+
+repositories {
+    maven { url = uri("https://maven.isxander.dev/releases") }
+}
+
+dependencies {
+    // We depend on Fabric Loader here to use the Fabric @Environment annotations,
+    // which get remapped to the correct annotations on each platform.
+    // Do NOT use other classes from Fabric Loader.
+    implementation "net.fabricmc:fabric-loader:$rootProject.fabric_loader_version"
+    compileOnly "dev.isxander:yet-another-config-lib:$rootProject.yacl_fabric_version"
+}

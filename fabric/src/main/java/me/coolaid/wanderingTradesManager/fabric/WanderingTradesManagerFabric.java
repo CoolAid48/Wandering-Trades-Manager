@@ -2,6 +2,7 @@ package me.coolaid.wanderingTradesManager.fabric;
 
 import me.coolaid.wanderingTradesManager.WanderingTradesManager;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 
 public final class WanderingTradesManagerFabric implements ModInitializer {
     @Override
@@ -12,5 +13,8 @@ public final class WanderingTradesManagerFabric implements ModInitializer {
 
         // Run our common setup.
         WanderingTradesManager.init();
+
+        ServerLifecycleEvents.SERVER_STARTING.register(WanderingTradesManager::onServerStarting);
+        ServerLifecycleEvents.SERVER_STOPPING.register(WanderingTradesManager::onServerStopping);
     }
 }

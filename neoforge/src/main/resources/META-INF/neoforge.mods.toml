@@ -12,6 +12,7 @@ credits = "Vanilla Tweaks Team, Jeremiah Scottie"
 description = '''
 Adds a robust config screen for easier management of your Wandering Trades datapack from Vanilla Tweaks
 '''
+
 #logoFile = ""
 
 [[mixins]]

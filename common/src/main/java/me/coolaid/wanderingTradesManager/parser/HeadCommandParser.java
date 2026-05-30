@@ -8,12 +8,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class HeadCommandParser {
     private static final Pattern TRADE_INDEX_PATTERN = Pattern.compile("execute\\s+if\\s+score\\s+@s\\s+wt_tradeIndex\\s+matches\\s+(\\d+)");
-    private static final Pattern ITEM_NAME_PATTERN = Pattern.compile("\"minecraft:(?:item_name|custom_name)\"\\s*:\\s*(?:'\"([^\"]+)\"'|\"([^\"]+)\")");
+    private static final Pattern ITEM_NAME_PATTERN = Pattern.compile("\"minecraft:(?:item_name|custom_name)\"\\s*:\\s*(?:'([^']*)'|\"([^\"]*)\")");
     private static final Pattern MINI_NAME_PATTERN = Pattern.compile("\\bMini\\s+([^\"']+)");
     private static final Pattern TEXTURE_PATTERN = Pattern.compile("value\\s*:\\s*\"([A-Za-z0-9+/=]+)\"");
 
@@ -27,19 +28,19 @@ public final class HeadCommandParser {
         }
 
         Matcher matcher = TRADE_INDEX_PATTERN.matcher(content);
-        List<Integer> starts = new ArrayList<>();
+        int entryStart = -1;
 
         while (matcher.find()) {
-            starts.add(matcher.start());
+            if (entryStart >= 0) {
+                parseTradeEntry(content.substring(entryStart, matcher.start()), sourcePack, sourceFunction)
+                        .ifPresent(heads::add);
+            }
+            entryStart = matcher.start();
         }
 
-        for (int i = 0; i < starts.size(); i++) {
-            int start = starts.get(i);
-            int end = i + 1 < starts.size() ? starts.get(i + 1) : content.length();
-
-            parseTradeEntry(content.substring(start, end), sourcePack, sourceFunction).stream()
-                    .filter(CustomHead::isValid)
-                    .forEach(heads::add);
+        if (entryStart >= 0) {
+            parseTradeEntry(content.substring(entryStart), sourcePack, sourceFunction)
+                    .ifPresent(heads::add);
         }
 
         return heads;
@@ -56,12 +57,12 @@ public final class HeadCommandParser {
         return new CustomHead(name, textureValue, -1, "", "", CustomHead.HeadType.fromName(extractedName));
     }
 
-    private static List<CustomHead> parseTradeEntry(String entry, String sourcePack, String sourceFunction) {
+    private static Optional<CustomHead> parseTradeEntry(String entry, String sourcePack, String sourceFunction) {
         Matcher indexMatcher = TRADE_INDEX_PATTERN.matcher(entry);
         Matcher textureMatcher = TEXTURE_PATTERN.matcher(entry);
 
         if (!indexMatcher.find() || !textureMatcher.find()) {
-            return List.of();
+            return Optional.empty();
         }
 
         int tradeIndex = Integer.parseInt(indexMatcher.group(1));
@@ -84,13 +85,14 @@ public final class HeadCommandParser {
                 type
         );
 
-        return List.of(head);
+        return head.isValid() ? Optional.of(head) : Optional.empty();
     }
 
     private static HeadName findHeadName(String entry) {
         Matcher itemNameMatcher = ITEM_NAME_PATTERN.matcher(entry);
         if (itemNameMatcher.find()) {
             String name = itemNameMatcher.group(1) != null ? itemNameMatcher.group(1) : itemNameMatcher.group(2);
+            name = stripWrappingQuotes(name);
             return new HeadName(cleanDisplayName(name), CustomHead.HeadType.fromName(name));
         }
 
@@ -101,6 +103,16 @@ public final class HeadCommandParser {
         }
 
         return new HeadName("", CustomHead.HeadType.CUSTOM);
+    }
+
+    private static String stripWrappingQuotes(String value) {
+        String stripped = value.strip();
+        while (stripped.length() >= 2
+                && ((stripped.charAt(0) == '"' && stripped.charAt(stripped.length() - 1) == '"')
+                || (stripped.charAt(0) == '\'' && stripped.charAt(stripped.length() - 1) == '\''))) {
+            stripped = stripped.substring(1, stripped.length() - 1).strip();
+        }
+        return stripped;
     }
 
     private static String sanitizeTextureValue(String input) {
@@ -151,8 +163,7 @@ public final class HeadCommandParser {
             return "Custom Head";
         }
 
-        return name.replaceFirst("(?i)^Mini\\s+", "")
-                .replaceAll("[&][0-9a-fk-orA-FK-OR]", "")
+        return name.replaceAll("[&][0-9a-fk-orA-FK-OR]", "")
                 .replaceAll("[^\\w\\s\\-().,'!]", "")
                 .replaceAll("\\s+", " ")
                 .trim();

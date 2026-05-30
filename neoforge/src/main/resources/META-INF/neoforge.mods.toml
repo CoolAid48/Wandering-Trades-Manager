@@ -8,12 +8,12 @@ modId = "wanderingtradesmanager"
 version = "${version}"
 displayName = "Wandering Trades Manager"
 authors = "CoolAid48"
-credits = "Vanilla Tweaks Team, Jeremiah Scottie"
+credits = "Jeremiah Scottie"
 description = '''
-Adds a robust config screen for easier management of your Wandering Trades datapack from Vanilla Tweaks
+Adds a config screen to manage your VT Wandering Trades datapack in-game
+
+Credits:
+Vanilla Tweaks: https://vanillatweaks.net
 '''
 
-#logoFile = ""
-
-[[mixins]]
-config = "wandering-trades-manager.mixins.json"
+logoFile = "assets/wanderingtradesmanager/icon.png"

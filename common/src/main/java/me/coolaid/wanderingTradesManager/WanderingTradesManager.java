@@ -11,14 +11,45 @@ public final class WanderingTradesManager {
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     private static final WanderingTradesDatapackManager DATAPACK_MANAGER = new WanderingTradesDatapackManager();
+    private static boolean headDisplayBufferPending;
 
     public static void init() {
-        LOGGER.info("Wandering Trades Manager initialized");
+        LOGGER.info("Initializing the Wandering Trades Manager");
     }
 
     public static void onServerStarting(MinecraftServer server) {
+        resetHeadDisplayBuffer();
         DatapackScanResult scan = DATAPACK_MANAGER.refresh(server);
+        logScan(scan);
+    }
 
+    public static void onServerStopping(MinecraftServer server) {
+        DATAPACK_MANAGER.clear();
+        clearHeadDisplayBuffer();
+    }
+
+    public static WanderingTradesDatapackManager datapackManager() {
+        return DATAPACK_MANAGER;
+    }
+
+    public static synchronized boolean consumeHeadDisplayBuffer() {
+        if (!headDisplayBufferPending) {
+            return false;
+        }
+
+        headDisplayBufferPending = false;
+        return true;
+    }
+
+    private static synchronized void resetHeadDisplayBuffer() {
+        headDisplayBufferPending = true;
+    }
+
+    private static synchronized void clearHeadDisplayBuffer() {
+        headDisplayBufferPending = false;
+    }
+
+    private static void logScan(DatapackScanResult scan) {
         scan.warnings().forEach(warning -> LOGGER.warn("[Wandering Trades scan] {}", warning));
 
         if (scan.hasMatchingPacks()) {
@@ -30,13 +61,5 @@ public final class WanderingTradesManager {
         } else {
             LOGGER.warn("No installed Wandering Trades datapack was found in this world's datapacks folder");
         }
-    }
-
-    public static void onServerStopping(MinecraftServer server) {
-        DATAPACK_MANAGER.clear();
-    }
-
-    public static WanderingTradesDatapackManager datapackManager() {
-        return DATAPACK_MANAGER;
     }
 }

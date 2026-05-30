@@ -1,8 +1,17 @@
 package me.coolaid.wanderingTradesManager.data;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.mojang.serialization.JsonOps;
 import me.coolaid.wanderingTradesManager.parser.HeadCommandParser;
+import net.minecraft.ChatFormatting;
+import net.minecraft.SharedConstants;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.packs.OverlayMetadataSection;
+import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.metadata.pack.PackFormat;
 import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.IOException;
@@ -16,8 +25,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -31,27 +38,34 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class WanderingTradesDatapackManager {
-    private static final List<String> ADD_TRADE_FUNCTION_PATHS = List.of(
-            "overlay_71/data/wandering_trades/function/add_trade.mcfunction",
-            "overlay_71/data/wandering_trades/functions/add_trade.mcfunction",
+    private static final List<String> ADD_TRADE_RESOURCE_PATHS = List.of(
             "data/wandering_trades/function/add_trade.mcfunction",
             "data/wandering_trades/functions/add_trade.mcfunction"
     );
+    private static final List<String> PROVIDE_TRADE_FUNCTION_NAMES = List.of(
+            "provide_hermit_trades.mcfunction",
+            "provide_block_trades.mcfunction"
+    );
+    private static final String PACK_MCMETA = "pack.mcmeta";
+    private static final String OVERLAYS_KEY = "overlays";
     private static final Pattern TRADE_INDEX_PATTERN = Pattern.compile("execute\\s+if\\s+score\\s+@s\\s+wt_tradeIndex\\s+matches\\s+(\\d+)");
-    private static final Pattern RANDOM_RANGE_PATTERN = Pattern.compile("(execute\\s+store\\s+result\\s+score\\s+@s\\s+wt_tradeIndex\\s+run\\s+random\\s+value\\s+)(\\d+)\\.\\.(\\d+)");
-    private static final Pattern ITEM_NAME_ASSIGNMENT_PATTERN = Pattern.compile("(\"minecraft:(?:item_name|custom_name)\"\\s*:\\s*)(?:'\"[^\"]*\"'|\"[^\"]*\")");
+    private static final Pattern RANDOM_RANGE_PATTERN = Pattern.compile("(?m)(^\\s*(?!#)[^\\r\\n]*\\bwt_tradeIndex\\b[^\\r\\n]*\\brandom\\s+value\\s+)(\\d+)\\.\\.(\\d+)");
+    private static final Pattern ITEM_NAME_ASSIGNMENT_PATTERN = Pattern.compile("(\"minecraft:(?:item_name|custom_name)\"\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")");
     private static final Pattern TEXTURE_ASSIGNMENT_PATTERN = Pattern.compile("(value\\s*:\\s*\")([A-Za-z0-9+/=]+)(\")");
-    private static final DateTimeFormatter BACKUP_STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS");
     private static final String TEMP_PACK_PREFIX = "wtm_edit_";
     private static final String TEMP_PACK_SUFFIX = ".wtm-tmp";
 
     private DatapackScanResult lastScan = DatapackScanResult.empty();
 
     public DatapackScanResult refresh(MinecraftServer server) {
-        return refresh(server.getWorldPath(LevelResource.DATAPACK_DIR));
+        return refresh(server.getWorldPath(LevelResource.DATAPACK_DIR), serverDataPackFormat());
     }
 
     public DatapackScanResult refresh(Path datapacksDirectory) {
+        return refresh(datapacksDirectory, serverDataPackFormat());
+    }
+
+    private DatapackScanResult refresh(Path datapacksDirectory, PackFormat packFormat) {
         List<Path> matchingPacks = new ArrayList<>();
         LinkedHashMap<String, CustomHead> heads = new LinkedHashMap<>();
         List<String> warnings = new ArrayList<>();
@@ -73,7 +87,7 @@ public final class WanderingTradesDatapackManager {
                 if (isTemporaryPack(pack)) {
                     continue;
                 }
-                scanPack(pack, matchingPacks, heads, warnings);
+                scanPack(pack, packFormat, matchingPacks, heads, warnings);
             }
         } catch (IOException e) {
             warnings.add("Failed to list datapacks in " + datapacksDirectory + ": " + e.getMessage());
@@ -81,6 +95,10 @@ public final class WanderingTradesDatapackManager {
 
         lastScan = new DatapackScanResult(datapacksDirectory, matchingPacks, heads.values().stream().toList(), warnings);
         return lastScan;
+    }
+
+    private static PackFormat serverDataPackFormat() {
+        return SharedConstants.getCurrentVersion().packVersion(PackType.SERVER_DATA);
     }
 
     public DatapackEditResult addHead(String requestedName, String textureValue) {
@@ -100,12 +118,13 @@ public final class WanderingTradesDatapackManager {
             return DatapackEditResult.failure(message("invalid_texture"));
         }
 
-        String duplicateName = name;
-        if (lastScan.heads().stream().anyMatch(head -> head.name().equalsIgnoreCase(duplicateName))) {
-            return DatapackEditResult.failure(message("duplicate_name", name));
-        }
-        if (lastScan.heads().stream().anyMatch(head -> head.textureValue().equals(texture))) {
-            return DatapackEditResult.failure(message("duplicate_texture"));
+        for (CustomHead head : lastScan.heads()) {
+            if (head.name().equalsIgnoreCase(name)) {
+                return DatapackEditResult.failure(message("duplicate_name", name));
+            }
+            if (head.textureValue().equals(texture)) {
+                return DatapackEditResult.failure(message("duplicate_texture"));
+            }
         }
 
         Optional<EditableFunction> target = findPrimaryEditableFunction();
@@ -115,17 +134,14 @@ public final class WanderingTradesDatapackManager {
 
         String finalName = name;
         String finalTexture = texture;
+        EditableFunction editableFunction = target.get();
         try {
-            editPack(target.get().pack(), root -> {
-                Path function = resolve(root, target.get().functionPath());
-                String content = Files.readString(function, StandardCharsets.UTF_8);
+            editFunction(editableFunction, content -> {
                 int nextIndex = nextTradeIndex(content);
-                String updated = content.stripTrailing() + System.lineSeparator() + generateTradeEntry(nextIndex, finalName, finalTexture) + System.lineSeparator();
-                writeStringWithBackup(function, updated);
-                updateTradeRange(root, target.get().functionPath(), updated);
+                return appendTradeEntry(content, generateTradeEntry(nextIndex, finalName, finalTexture));
             });
             refresh(lastScan.datapacksDirectory());
-            return DatapackEditResult.success(message("added_head", finalName));
+            return DatapackEditResult.success(message(ChatFormatting.GREEN, "added_head", finalName));
         } catch (IOException e) {
             return DatapackEditResult.failure(message("add_failed", e.getMessage()));
         }
@@ -134,11 +150,6 @@ public final class WanderingTradesDatapackManager {
     public DatapackEditResult updateHead(CustomHead original, String requestedName, String textureValue) {
         if (original == null) {
             return DatapackEditResult.failure(message("no_head_selected"));
-        }
-
-        Optional<EditableFunction> target = editableFunctionFor(original);
-        if (target.isEmpty()) {
-            return DatapackEditResult.failure(message("head_file_missing"));
         }
 
         String name = cleanName(requestedName);
@@ -153,19 +164,29 @@ public final class WanderingTradesDatapackManager {
             return DatapackEditResult.failure(message("invalid_texture"));
         }
 
+        if (name.equals(original.name()) && texture.equals(original.textureValue())) {
+            return DatapackEditResult.unchanged(message("no_changes"));
+        }
+
+        Optional<EditableFunction> target = editableFunctionFor(original);
+        if (target.isEmpty()) {
+            return DatapackEditResult.failure(message("head_file_missing"));
+        }
+
+        EditableFunction editableFunction = target.get();
         try {
-            editPack(target.get().pack(), root -> {
-                Path function = resolve(root, target.get().functionPath());
-                String content = Files.readString(function, StandardCharsets.UTF_8);
-                String updated = replaceEntry(content, original.tradeIndex(), entry -> updateEntry(entry, original.tradeIndex(), name, texture));
-                if (content.equals(updated)) {
+            boolean changed = editFunction(editableFunction, content -> {
+                Optional<String> updated = replaceEntry(content, original.tradeIndex(), entry -> updateEntry(entry, original.tradeIndex(), name, texture));
+                if (updated.isEmpty()) {
                     throw new IOException("Trade #" + original.tradeIndex() + " was not found");
                 }
-                writeStringWithBackup(function, updated);
-                updateTradeRange(root, target.get().functionPath(), updated);
+                return updated.get();
             });
+            if (!changed) {
+                return DatapackEditResult.unchanged(message("no_changes"));
+            }
             refresh(lastScan.datapacksDirectory());
-            return DatapackEditResult.success(message("updated_head", name));
+            return DatapackEditResult.success(message(ChatFormatting.GREEN, "updated_head", name));
         } catch (IOException e) {
             return DatapackEditResult.failure(message("update_failed", e.getMessage()));
         }
@@ -181,19 +202,17 @@ public final class WanderingTradesDatapackManager {
             return DatapackEditResult.failure(message("head_file_missing"));
         }
 
+        EditableFunction editableFunction = target.get();
         try {
-            editPack(target.get().pack(), root -> {
-                Path function = resolve(root, target.get().functionPath());
-                String content = Files.readString(function, StandardCharsets.UTF_8);
-                String updated = removeEntry(content, head.tradeIndex());
-                if (content.equals(updated)) {
+            editFunction(editableFunction, content -> {
+                Optional<String> updated = removeEntry(content, head.tradeIndex());
+                if (updated.isEmpty()) {
                     throw new IOException("Trade #" + head.tradeIndex() + " was not found");
                 }
-                writeStringWithBackup(function, updated);
-                updateTradeRange(root, target.get().functionPath(), updated);
+                return updated.get();
             });
             refresh(lastScan.datapacksDirectory());
-            return DatapackEditResult.success(message("removed_head", head.name()));
+            return DatapackEditResult.success(message(ChatFormatting.RED, "removed_head", head.name()));
         } catch (IOException e) {
             return DatapackEditResult.failure(message("remove_failed", e.getMessage()));
         }
@@ -208,8 +227,9 @@ public final class WanderingTradesDatapackManager {
     }
 
     private Optional<EditableFunction> findPrimaryEditableFunction() {
+        PackFormat packFormat = serverDataPackFormat();
         for (Path pack : lastScan.matchingPacks()) {
-            Optional<String> functionPath = findFirstAddTradeFunction(pack);
+            Optional<String> functionPath = findFirstAddTradeFunction(pack, packFormat);
             if (functionPath.isPresent()) {
                 return Optional.of(new EditableFunction(pack, functionPath.get()));
             }
@@ -229,9 +249,9 @@ public final class WanderingTradesDatapackManager {
                 .map(path -> new EditableFunction(path, head.sourceFunction()));
     }
 
-    private Optional<String> findFirstAddTradeFunction(Path pack) {
+    private Optional<String> findFirstAddTradeFunction(Path pack, PackFormat packFormat) {
         if (Files.isDirectory(pack)) {
-            return findAddTradeFunctions(pack).stream().findFirst();
+            return findAddTradeFunctions(pack, packFormat, pack.getFileName().toString(), new ArrayList<>()).stream().findFirst();
         }
 
         if (!isZip(pack)) {
@@ -239,27 +259,11 @@ public final class WanderingTradesDatapackManager {
         }
 
         URI uri = URI.create("jar:" + pack.toUri());
-        FileSystem fileSystem = null;
-        boolean closeFileSystem = false;
 
         try {
-            try {
-                fileSystem = FileSystems.newFileSystem(uri, Map.of());
-                closeFileSystem = true;
-            } catch (FileSystemAlreadyExistsException ignored) {
-                fileSystem = FileSystems.getFileSystem(uri);
-            }
-
-            return findAddTradeFunctions(fileSystem.getPath("/")).stream().findFirst();
+            return withZipRoot(uri, root -> findAddTradeFunctions(root, packFormat, pack.getFileName().toString(), new ArrayList<>()).stream().findFirst());
         } catch (IOException | RuntimeException ignored) {
             return Optional.empty();
-        } finally {
-            if (closeFileSystem && fileSystem != null) {
-                try {
-                    fileSystem.close();
-                } catch (IOException ignored) {
-                }
-            }
         }
     }
 
@@ -278,12 +282,13 @@ public final class WanderingTradesDatapackManager {
 
     private static void scanPack(
             Path pack,
+            PackFormat packFormat,
             List<Path> matchingPacks,
             Map<String, CustomHead> heads,
             List<String> warnings
     ) {
         if (Files.isDirectory(pack)) {
-            scanRoot(pack, pack, matchingPacks, heads, warnings);
+            scanRoot(pack, pack, packFormat, matchingPacks, heads, warnings);
             return;
         }
 
@@ -292,33 +297,21 @@ public final class WanderingTradesDatapackManager {
         }
 
         URI uri = URI.create("jar:" + pack.toUri());
-        FileSystem fileSystem = null;
-        boolean closeFileSystem = false;
 
         try {
-            try {
-                fileSystem = FileSystems.newFileSystem(uri, Map.of());
-                closeFileSystem = true;
-            } catch (FileSystemAlreadyExistsException ignored) {
-                fileSystem = FileSystems.getFileSystem(uri);
-            }
-
-            scanRoot(pack, fileSystem.getPath("/"), matchingPacks, heads, warnings);
+            withZipRoot(uri, root -> {
+                scanRoot(pack, root, packFormat, matchingPacks, heads, warnings);
+                return null;
+            });
         } catch (IOException | RuntimeException e) {
             warnings.add("Failed to scan datapack " + pack.getFileName() + ": " + e.getMessage());
-        } finally {
-            if (closeFileSystem && fileSystem != null) {
-                try {
-                    fileSystem.close();
-                } catch (IOException ignored) {
-                }
-            }
         }
     }
 
     private static void scanRoot(
             Path externalPack,
             Path root,
+            PackFormat packFormat,
             List<Path> matchingPacks,
             Map<String, CustomHead> heads,
             List<String> warnings
@@ -326,7 +319,7 @@ public final class WanderingTradesDatapackManager {
         boolean matchedPack = false;
         String packName = externalPack.getFileName().toString();
 
-        for (String functionPath : findAddTradeFunctions(root)) {
+        for (String functionPath : findAddTradeFunctions(root, packFormat, packName, warnings)) {
             Path function = resolve(root, functionPath);
             if (!Files.isRegularFile(function)) {
                 continue;
@@ -336,8 +329,11 @@ public final class WanderingTradesDatapackManager {
 
             try {
                 String content = Files.readString(function, StandardCharsets.UTF_8);
+                List<ProvideTradeRange> providerRanges = provideTradeRanges(root, new EditableFunction(externalPack, functionPath));
                 for (CustomHead head : HeadCommandParser.parseFunction(content, packName, functionPath)) {
-                    heads.putIfAbsent(head.dedupeKey(), head);
+                    if (isAvailableTradeIndex(head.tradeIndex(), providerRanges)) {
+                        heads.putIfAbsent(head.dedupeKey(), head);
+                    }
                 }
             } catch (IOException e) {
                 warnings.add("Failed to read " + functionPath + " from " + packName + ": " + e.getMessage());
@@ -349,24 +345,104 @@ public final class WanderingTradesDatapackManager {
         }
     }
 
-    private static List<String> findAddTradeFunctions(Path root) {
-        Set<String> paths = new LinkedHashSet<>();
+    private static List<String> findAddTradeFunctions(Path root, PackFormat packFormat, String packName, List<String> warnings) {
+        Map<String, String> pathsByResource = new LinkedHashMap<>();
+        List<String> activeOverlays = activeOverlayDirectories(root, packFormat, packName, warnings);
 
-        for (String functionPath : ADD_TRADE_FUNCTION_PATHS) {
+        for (int i = activeOverlays.size() - 1; i >= 0; i--) {
+            addAddTradeFunctions(root, activeOverlays.get(i), pathsByResource);
+        }
+
+        addAddTradeFunctions(root, "", pathsByResource);
+
+        return List.copyOf(pathsByResource.values());
+    }
+
+    private static void addAddTradeFunctions(Path root, String dataRoot, Map<String, String> pathsByResource) {
+        for (String resourcePath : ADD_TRADE_RESOURCE_PATHS) {
+            String functionPath = rootedDataPath(dataRoot, resourcePath);
             if (Files.isRegularFile(resolve(root, functionPath))) {
-                paths.add(functionPath);
+                pathsByResource.putIfAbsent(resourcePath, functionPath);
             }
         }
 
-        try (var stream = Files.walk(root, 8)) {
+        Path searchRoot = resolve(root, rootedDataPath(dataRoot, "data/wandering_trades"));
+        if (!Files.isDirectory(searchRoot)) {
+            return;
+        }
+
+        try (var stream = Files.walk(searchRoot, 6)) {
             stream.filter(Files::isRegularFile)
                     .map(path -> toRelativeString(root, path))
                     .filter(WanderingTradesDatapackManager::isAddTradeFunction)
-                    .forEach(paths::add);
+                    .forEach(path -> pathsByResource.putIfAbsent(dataResourcePath(path), path));
         } catch (IOException ignored) {
         }
 
-        return List.copyOf(paths);
+    }
+
+    private static List<String> activeOverlayDirectories(Path root, PackFormat packFormat, String packName, List<String> warnings) {
+        Path metadataFile = resolve(root, PACK_MCMETA);
+        if (!Files.isRegularFile(metadataFile)) {
+            return List.of();
+        }
+
+        try {
+            JsonElement metadata = JsonParser.parseString(Files.readString(metadataFile, StandardCharsets.UTF_8));
+            if (!metadata.isJsonObject()) {
+                return List.of();
+            }
+
+            JsonObject metadataObject = metadata.getAsJsonObject();
+            if (!metadataObject.has(OVERLAYS_KEY)) {
+                return List.of();
+            }
+
+            return OverlayMetadataSection.codecForPackType(PackType.SERVER_DATA)
+                    .parse(JsonOps.INSTANCE, metadataObject.get(OVERLAYS_KEY))
+                    .resultOrPartial(message -> warnings.add("Failed to parse overlays in " + packName + ": " + message))
+                    .map(section -> existingOverlayDirectories(root, packName, section.overlaysForVersion(packFormat), warnings))
+                    .orElseGet(List::of);
+        } catch (IOException | RuntimeException e) {
+            warnings.add("Failed to read overlays in " + packName + ": " + e.getMessage());
+            return List.of();
+        }
+    }
+
+    private static List<String> existingOverlayDirectories(Path root, String packName, List<String> overlays, List<String> warnings) {
+        List<String> active = new ArrayList<>();
+
+        for (String overlay : overlays) {
+            if (overlay == null || overlay.isBlank()) {
+                continue;
+            }
+
+            if (Files.isDirectory(resolve(root, overlay))) {
+                active.add(overlay);
+            } else {
+                warnings.add("Active overlay directory " + overlay + " declared by " + packName + " was not found");
+            }
+        }
+
+        return active;
+    }
+
+    private static String rootedDataPath(String dataRoot, String dataPath) {
+        if (dataRoot == null || dataRoot.isBlank()) {
+            return dataPath;
+        }
+
+        return dataRoot.replace('\\', '/').replaceAll("/+$", "") + "/" + dataPath;
+    }
+
+    private static String dataResourcePath(String path) {
+        String normalized = path.replace('\\', '/');
+        if (normalized.startsWith("data/")) {
+            return normalized;
+        }
+
+        int dataStart = normalized.indexOf("/data/");
+        return dataStart >= 0 ? normalized.substring(dataStart + 1) : normalized;
     }
 
     private static boolean isAddTradeFunction(String path) {
@@ -388,41 +464,91 @@ public final class WanderingTradesDatapackManager {
         return path;
     }
 
-    private static void editPack(Path pack, PackEdit edit) throws IOException {
+    private static boolean editPack(Path pack, PackEdit edit) throws IOException {
         if (Files.isDirectory(pack)) {
-            edit.apply(pack);
-            return;
+            return edit.apply(pack);
         }
 
         if (!isZip(pack)) {
             throw new IOException("Not a folder or zip datapack: " + pack.getFileName());
         }
 
-        Path backup = backupPath(pack);
-        Files.copy(pack, backup, StandardCopyOption.COPY_ATTRIBUTES);
-
-        Path tempZip = Files.createTempFile(pack.getParent(), TEMP_PACK_PREFIX, TEMP_PACK_SUFFIX);
+        Path tempZip = null;
+        Path restoreZip = null;
 
         try {
+            tempZip = Files.createTempFile(pack.getParent(), TEMP_PACK_PREFIX, TEMP_PACK_SUFFIX);
             Files.copy(pack, tempZip, StandardCopyOption.REPLACE_EXISTING);
 
             URI uri = URI.create("jar:" + tempZip.toUri());
+            boolean changed;
             try (FileSystem fileSystem = FileSystems.newFileSystem(uri, Map.of())) {
-                edit.apply(fileSystem.getPath("/"));
+                changed = edit.apply(fileSystem.getPath("/"));
             }
+
+            if (!changed) {
+                return false;
+            }
+
+            restoreZip = Files.createTempFile(TEMP_PACK_PREFIX, TEMP_PACK_SUFFIX);
+            Files.copy(pack, restoreZip, StandardCopyOption.REPLACE_EXISTING);
 
             try {
                 replaceZip(pack, tempZip);
+                return true;
             } catch (IOException e) {
                 try {
-                    replaceFileContents(backup, pack);
+                    replaceFileContents(restoreZip, pack);
                 } catch (IOException restoreFailure) {
                     e.addSuppressed(restoreFailure);
                 }
                 throw e;
             }
         } finally {
-            Files.deleteIfExists(tempZip);
+            if (tempZip != null) {
+                Files.deleteIfExists(tempZip);
+            }
+            if (restoreZip != null) {
+                Files.deleteIfExists(restoreZip);
+            }
+        }
+    }
+
+    private static boolean editFunction(EditableFunction target, FunctionContentEdit edit) throws IOException {
+        return editPack(target.pack(), root -> {
+            Path function = resolve(root, target.functionPath());
+            String content = Files.readString(function, StandardCharsets.UTF_8);
+            String updated = edit.apply(content);
+            if (content.equals(updated)) {
+                return false;
+            }
+
+            writeString(function, updated);
+            updateTradeRanges(root, target, updated);
+            return true;
+        });
+    }
+
+    private static <T> T withZipRoot(URI uri, ZipRootReader<T> reader) throws IOException {
+        FileSystem fileSystem = null;
+        boolean closeFileSystem = false;
+
+        try {
+            try {
+                fileSystem = FileSystems.newFileSystem(uri, Map.of());
+                closeFileSystem = true;
+            } catch (FileSystemAlreadyExistsException ignored) {
+                fileSystem = FileSystems.getFileSystem(uri);
+            }
+
+            return reader.read(fileSystem.getPath("/"));
+        } finally {
+            if (closeFileSystem && fileSystem != null) {
+                try {
+                    fileSystem.close();
+                } catch (IOException ignored) {
+                }
+            }
         }
     }
 
@@ -460,41 +586,40 @@ public final class WanderingTradesDatapackManager {
         }
     }
 
-    private static Path backupPath(Path path) {
-        String stamp = LocalDateTime.now().format(BACKUP_STAMP);
-        Path backup = path.resolveSibling(path.getFileName() + ".wtm-backup-" + stamp);
-        int attempt = 1;
-        while (Files.exists(backup)) {
-            backup = path.resolveSibling(path.getFileName() + ".wtm-backup-" + stamp + "-" + attempt);
-            attempt++;
-        }
-        return backup;
-    }
-
-    private static void writeStringWithBackup(Path file, String content) throws IOException {
-        if (Files.exists(file) && file.getFileSystem().equals(FileSystems.getDefault())) {
-            Files.copy(file, backupPath(file), StandardCopyOption.COPY_ATTRIBUTES);
-        }
+    private static void writeString(Path file, String content) throws IOException {
         Files.writeString(file, content, StandardCharsets.UTF_8);
     }
 
     private static int nextTradeIndex(String content) {
-        return parseTradeIndices(content).stream().mapToInt(Integer::intValue).max().orElse(0) + 1;
+        return maxTradeIndex(content, 0) + 1;
     }
 
-    private static List<Integer> parseTradeIndices(String content) {
-        List<Integer> indices = new ArrayList<>();
+    private static String appendTradeEntry(String content, String entry) {
+        String lineSeparator = lineSeparator(content);
+        String stripped = content.stripTrailing();
+        if (stripped.isBlank()) {
+            return entry + lineSeparator;
+        }
+        return stripped + lineSeparator + lineSeparator + entry + lineSeparator;
+    }
+
+    private static String lineSeparator(String content) {
+        return content.contains("\r\n") ? "\r\n" : System.lineSeparator();
+    }
+
+    private static int maxTradeIndex(String content, int fallback) {
+        int max = fallback;
         Matcher matcher = TRADE_INDEX_PATTERN.matcher(content);
         while (matcher.find()) {
-            indices.add(Integer.parseInt(matcher.group(1)));
+            max = Math.max(max, Integer.parseInt(matcher.group(1)));
         }
-        return indices;
+        return max;
     }
 
     private static String generateTradeEntry(int tradeIndex, String name, String textureValue) {
         return "execute if score @s wt_tradeIndex matches " + tradeIndex + " run data modify entity @s Offers.Recipes prepend value "
-                + "{rewardExp:0b,maxUses:3,buy:{id:\"minecraft:emerald\"},"
-                + "sell:{id:\"minecraft:player_head\",count:1,components:{\"minecraft:item_name\":'\"" + escapeCommandText(name) + "\"',"
+                + "{rewardExp:0b,maxUses:1,buy:{id:\"minecraft:emerald\"},"
+                + "sell:{id:\"minecraft:player_head\",count:5,components:{\"minecraft:item_name\":" + itemNameValue(name) + ","
                 + "\"minecraft:rarity\":\"uncommon\",\"minecraft:profile\":{properties:[{name:\"textures\",value:\""
                 + textureValue + "\"}]}}}}";
     }
@@ -502,7 +627,7 @@ public final class WanderingTradesDatapackManager {
     private static String updateEntry(String entry, int tradeIndex, String name, String textureValue) {
         Matcher nameMatcher = ITEM_NAME_ASSIGNMENT_PATTERN.matcher(entry);
         String updated = nameMatcher.find()
-                ? nameMatcher.replaceFirst(Matcher.quoteReplacement(nameMatcher.group(1) + "'\"" + escapeCommandText(name) + "\"'"))
+                ? nameMatcher.replaceFirst(Matcher.quoteReplacement(nameMatcher.group(1) + itemNameValue(name)))
                 : generateTradeEntry(tradeIndex, name, textureValue);
 
         Matcher textureMatcher = TEXTURE_ASSIGNMENT_PATTERN.matcher(updated);
@@ -511,21 +636,21 @@ public final class WanderingTradesDatapackManager {
                 : generateTradeEntry(tradeIndex, name, textureValue);
     }
 
-    private static String replaceEntry(String content, int tradeIndex, EntryEditor editor) throws IOException {
+    private static Optional<String> replaceEntry(String content, int tradeIndex, EntryEditor editor) throws IOException {
         int[] span = findEntrySpan(content, tradeIndex);
         if (span == null) {
-            return content;
+            return Optional.empty();
         }
 
         String entry = content.substring(span[0], span[1]);
         String replacement = editor.edit(entry);
-        return content.substring(0, span[0]) + replacement + content.substring(span[1]);
+        return Optional.of(content.substring(0, span[0]) + replacement + content.substring(span[1]));
     }
 
-    private static String removeEntry(String content, int tradeIndex) {
+    private static Optional<String> removeEntry(String content, int tradeIndex) {
         int[] span = findEntrySpan(content, tradeIndex);
         if (span == null) {
-            return content;
+            return Optional.empty();
         }
 
         int start = span[0];
@@ -533,67 +658,179 @@ public final class WanderingTradesDatapackManager {
         while (end < content.length() && (content.charAt(end) == '\r' || content.charAt(end) == '\n')) {
             end++;
         }
-        return content.substring(0, start) + content.substring(end);
+        return Optional.of(content.substring(0, start) + content.substring(end));
     }
 
     private static int[] findEntrySpan(String content, int tradeIndex) {
         Matcher matcher = TRADE_INDEX_PATTERN.matcher(content);
-        List<Integer> starts = new ArrayList<>();
-        List<Integer> indices = new ArrayList<>();
+        int start = -1;
 
         while (matcher.find()) {
-            starts.add(matcher.start());
-            indices.add(Integer.parseInt(matcher.group(1)));
-        }
-
-        for (int i = 0; i < indices.size(); i++) {
-            if (indices.get(i) == tradeIndex) {
-                int start = starts.get(i);
-                int end = i + 1 < starts.size() ? starts.get(i + 1) : content.length();
-                return new int[]{start, end};
+            if (start >= 0) {
+                return new int[]{start, matcher.start()};
+            }
+            if (Integer.parseInt(matcher.group(1)) == tradeIndex) {
+                start = matcher.start();
             }
         }
 
-        return null;
+        return start >= 0 ? new int[]{start, content.length()} : null;
     }
 
-    private static void updateTradeRange(Path root, String addTradeFunctionPath, String addTradeContent) throws IOException {
-        String providePath = addTradeFunctionPath.replace("add_trade.mcfunction", "provide_block_trades.mcfunction");
-        Path provideFile = resolve(root, providePath);
-        if (!Files.isRegularFile(provideFile) && providePath.startsWith("overlay_71/")) {
-            providePath = providePath.substring("overlay_71/".length());
-            provideFile = resolve(root, providePath);
-        }
-        if (!Files.isRegularFile(provideFile)) {
+    private static void updateTradeRanges(Path root, EditableFunction target, String addTradeContent) throws IOException {
+        List<Integer> tradeIndexes = tradeIndexes(addTradeContent);
+        if (tradeIndexes.isEmpty()) {
             return;
         }
 
-        String content = Files.readString(provideFile, StandardCharsets.UTF_8);
-        Matcher matcher = RANDOM_RANGE_PATTERN.matcher(content);
-        if (!matcher.find()) {
+        List<ProvideTradeRange> providerRanges = provideTradeRanges(root, target);
+        for (int i = 0; i < providerRanges.size(); i++) {
+            ProvideTradeRange providerRange = providerRanges.get(i);
+            int upperExclusive = i + 1 < providerRanges.size()
+                    ? providerRanges.get(i + 1).lower()
+                    : Integer.MAX_VALUE;
+
+            Optional<TradeIndexRange> tradeIndexRange = tradeIndexRange(tradeIndexes, providerRange.lower(), upperExclusive);
+            if (tradeIndexRange.isPresent()) {
+                updateProvideTradeRange(providerRange, tradeIndexRange.get());
+            }
+        }
+    }
+
+    private static List<Integer> tradeIndexes(String content) {
+        List<Integer> indexes = new ArrayList<>();
+        Matcher matcher = TRADE_INDEX_PATTERN.matcher(content);
+        while (matcher.find()) {
+            indexes.add(Integer.parseInt(matcher.group(1)));
+        }
+        indexes.sort(Integer::compareTo);
+        return indexes;
+    }
+
+    private static List<ProvideTradeRange> provideTradeRanges(Path root, EditableFunction target) throws IOException {
+        List<ProvideTradeRange> ranges = new ArrayList<>();
+        List<String> activeOverlays = activeOverlayDirectories(root, serverDataPackFormat(), target.pack().getFileName().toString(), new ArrayList<>());
+        for (String functionName : PROVIDE_TRADE_FUNCTION_NAMES) {
+            findProvideTradeRange(root, target.functionPath(), functionName, activeOverlays)
+                    .ifPresent(ranges::add);
+        }
+
+        ranges.sort(Comparator.comparingInt(ProvideTradeRange::lower));
+        return ranges;
+    }
+
+    private static boolean isAvailableTradeIndex(int tradeIndex, List<ProvideTradeRange> providerRanges) {
+        for (ProvideTradeRange providerRange : providerRanges) {
+            if (tradeIndex >= providerRange.lower() && tradeIndex <= providerRange.upper()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static Optional<ProvideTradeRange> findProvideTradeRange(Path root, String addTradeFunctionPath, String functionName, List<String> activeOverlays) throws IOException {
+        for (String providePath : provideTradeFunctionCandidates(root, addTradeFunctionPath, functionName, activeOverlays)) {
+            Path provideFile = resolve(root, providePath);
+            if (!Files.isRegularFile(provideFile)) {
+                continue;
+            }
+
+            String content = Files.readString(provideFile, StandardCharsets.UTF_8);
+            Matcher matcher = RANDOM_RANGE_PATTERN.matcher(content);
+            if (matcher.find()) {
+                return Optional.of(new ProvideTradeRange(
+                        provideFile,
+                        content,
+                        Integer.parseInt(matcher.group(2)),
+                        Integer.parseInt(matcher.group(3))
+                ));
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private static List<String> provideTradeFunctionCandidates(Path root, String addTradeFunctionPath, String functionName, List<String> activeOverlays) throws IOException {
+        Set<String> candidates = new LinkedHashSet<>();
+
+        for (int i = activeOverlays.size() - 1; i >= 0; i--) {
+            addStandardProvideTradeCandidates(candidates, activeOverlays.get(i), functionName);
+        }
+        addStandardProvideTradeCandidates(candidates, "", functionName);
+
+        String siblingPath = addTradeFunctionPath.replace("add_trade.mcfunction", functionName);
+        candidates.add(siblingPath);
+        candidates.add(dataResourcePath(siblingPath));
+        addDiscoveredProvideTradeCandidates(root, functionName, candidates);
+
+        return List.copyOf(candidates);
+    }
+
+    private static void addStandardProvideTradeCandidates(Set<String> candidates, String dataRoot, String functionName) {
+        candidates.add(rootedDataPath(dataRoot, "data/wandering_trades/function/" + functionName));
+        candidates.add(rootedDataPath(dataRoot, "data/wandering_trades/functions/" + functionName));
+    }
+
+    private static void addDiscoveredProvideTradeCandidates(Path root, String functionName, Set<String> candidates) {
+        try (var stream = Files.walk(root, 10)) {
+            stream.filter(Files::isRegularFile)
+                    .map(path -> toRelativeString(root, path))
+                    .filter(path -> isWanderingTradesFunction(path, functionName))
+                    .forEach(candidates::add);
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static boolean isWanderingTradesFunction(String path, String functionName) {
+        String normalized = path.replace('\\', '/');
+        return normalized.endsWith("/" + functionName)
+                && (normalized.startsWith("data/wandering_trades/") || normalized.contains("/data/wandering_trades/"));
+    }
+
+    private static Optional<TradeIndexRange> tradeIndexRange(List<Integer> sortedIndexes, int lowerInclusive, int upperExclusive) {
+        int min = Integer.MAX_VALUE;
+        int max = Integer.MIN_VALUE;
+
+        for (int index : sortedIndexes) {
+            if (index < lowerInclusive) {
+                continue;
+            }
+            if (index >= upperExclusive) {
+                break;
+            }
+
+            min = Math.min(min, index);
+            max = Math.max(max, index);
+        }
+
+        return min == Integer.MAX_VALUE ? Optional.empty() : Optional.of(new TradeIndexRange(min, max));
+    }
+
+    private static void updateProvideTradeRange(ProvideTradeRange providerRange, TradeIndexRange tradeIndexRange) throws IOException {
+        if (providerRange.lower() == tradeIndexRange.min() && providerRange.upper() == tradeIndexRange.max()) {
             return;
         }
 
-        int lower = Integer.parseInt(matcher.group(2));
-        int upper = Integer.parseInt(matcher.group(3));
-        int maxIndex = parseTradeIndices(addTradeContent).stream().mapToInt(Integer::intValue).max().orElse(upper);
-        int newUpper = Math.max(lower, maxIndex);
-        if (newUpper == upper) {
-            return;
+        Matcher matcher = RANDOM_RANGE_PATTERN.matcher(providerRange.content());
+        if (matcher.find()) {
+            String updated = matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + tradeIndexRange.min() + ".." + tradeIndexRange.max()));
+            writeString(providerRange.file(), updated);
         }
-
-        String updated = matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + lower + ".." + newUpper));
-        writeStringWithBackup(provideFile, updated);
     }
 
     private static String cleanName(String value) {
         return value == null ? "" : value.trim().replaceAll("\\s+", " ");
     }
 
+    private static String itemNameValue(String value) {
+        return "'" + escapeCommandText(value) + "'";
+    }
+
     private static String escapeCommandText(String value) {
         return cleanName(value)
                 .replace("\\", "")
-                .replace("\"", "\\\"")
+                .replace("\"", "")
                 .replace("'", "");
     }
 
@@ -625,12 +862,32 @@ public final class WanderingTradesDatapackManager {
         return Component.translatable("message.wanderingtradesmanager." + key, args);
     }
 
+    private static Component message(ChatFormatting color, String key, Object... args) {
+        return message(key, args).copy().withStyle(color);
+    }
+
     private record EditableFunction(Path pack, String functionPath) {
+    }
+
+    private record ProvideTradeRange(Path file, String content, int lower, int upper) {
+    }
+
+    private record TradeIndexRange(int min, int max) {
     }
 
     @FunctionalInterface
     private interface PackEdit {
-        void apply(Path root) throws IOException;
+        boolean apply(Path root) throws IOException;
+    }
+
+    @FunctionalInterface
+    private interface FunctionContentEdit {
+        String apply(String content) throws IOException;
+    }
+
+    @FunctionalInterface
+    private interface ZipRootReader<T> {
+        T read(Path root) throws IOException;
     }
 
     @FunctionalInterface

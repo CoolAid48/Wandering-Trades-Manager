@@ -21,15 +21,17 @@ public final class HeadItemFactory {
 
     public static ItemStack create(CustomHead head) {
         ItemStack stack = new ItemStack(Items.PLAYER_HEAD);
-        stack.set(DataComponents.CUSTOM_NAME, Component.translatable("item.wanderingtradesmanager.mini_head", head.name()));
+        stack.set(DataComponents.CUSTOM_NAME, Component.literal(head.name()));
+        stack.set(DataComponents.PROFILE, ResolvableProfile.createResolved(createProfile(head)));
 
+        return stack;
+    }
+
+    public static GameProfile createProfile(CustomHead head) {
         Multimap<String, Property> properties = ArrayListMultimap.create();
         properties.put("textures", new Property("textures", head.textureValue()));
 
         UUID profileId = UUID.nameUUIDFromBytes(head.textureValue().getBytes(StandardCharsets.UTF_8));
-        GameProfile profile = new GameProfile(profileId, "wtm_head", new PropertyMap(properties));
-        stack.set(DataComponents.PROFILE, ResolvableProfile.createResolved(profile));
-
-        return stack;
+        return new GameProfile(profileId, "wtm_head", new PropertyMap(properties));
     }
 }

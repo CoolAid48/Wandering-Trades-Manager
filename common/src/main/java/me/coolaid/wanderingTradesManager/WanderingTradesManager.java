@@ -10,8 +10,10 @@ public final class WanderingTradesManager {
     public static final String MOD_ID = "wanderingtradesmanager";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
+    private static final long INITIAL_JOIN_BUFFER_WINDOW_MILLIS = 1500L;
     private static final WanderingTradesDatapackManager DATAPACK_MANAGER = new WanderingTradesDatapackManager();
     private static boolean headDisplayBufferPending;
+    private static long headDisplayBufferExpiresAtMillis;
 
     public static void init() {
         LOGGER.info("Initializing the Wandering Trades Manager");
@@ -37,16 +39,23 @@ public final class WanderingTradesManager {
             return false;
         }
 
-        headDisplayBufferPending = false;
+        if (System.currentTimeMillis() >= headDisplayBufferExpiresAtMillis) {
+            clearHeadDisplayBuffer();
+            return false;
+        }
+
+        clearHeadDisplayBuffer();
         return true;
     }
 
     private static synchronized void resetHeadDisplayBuffer() {
         headDisplayBufferPending = true;
+        headDisplayBufferExpiresAtMillis = System.currentTimeMillis() + INITIAL_JOIN_BUFFER_WINDOW_MILLIS;
     }
 
     private static synchronized void clearHeadDisplayBuffer() {
         headDisplayBufferPending = false;
+        headDisplayBufferExpiresAtMillis = 0L;
     }
 
     private static void logScan(DatapackScanResult scan) {

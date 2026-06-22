@@ -37,7 +37,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-public final class WanderingTradesHeadsScreen extends Screen {
+public final class HeadsScreen extends Screen {
     private static final int SCREEN_PADDING = 8;
     private static final int CONTROL_TOP = 8;
     private static final int CONTROL_HEIGHT = 20;
@@ -48,13 +48,10 @@ public final class WanderingTradesHeadsScreen extends Screen {
     private static final int TYPE_BUTTON_WIDTH = 96;
     private static final int SORT_BUTTON_WIDTH = 96;
     private static final int ADD_BUTTON_WIDTH = 52;
-    private static final int OPEN_FOLDER_BUTTON_WIDTH = 78;
+    private static final int CONFIGURE_BUTTON_WIDTH = 78;
     private static final int COMPACT_ADD_BUTTON_WIDTH = 40;
-    private static final int COMPACT_OPEN_FOLDER_BUTTON_WIDTH = 74;
-    private static final int TARGET_COLUMNS = 7;
-    private static final int TARGET_VISIBLE_ROWS = 5;
+    private static final int COMPACT_CONFIGURE_BUTTON_WIDTH = 74;
     private static final int MIN_TILE_WIDTH = 46;
-    private static final int MIN_ROW_HEIGHT = 36;
     private static final int TILE_GAP = 2;
     private static final int ITEM_BASE_SIZE = 16;
     private static final int MAX_ICON_SIZE = 128;
@@ -62,9 +59,11 @@ public final class WanderingTradesHeadsScreen extends Screen {
     private static final int RESERVED_NAME_LINES = 2;
     private static final float MAX_NAME_SCALE = 0.9F;
     private static final float MIN_NAME_SCALE = 0.55F;
+    private static final float EMERGENCY_MIN_NAME_SCALE = 0.45F;
     private static final float NAME_SCALE_STEP = 0.05F;
+    private static final int LONG_WORD_WRAP_OVERFLOW_CHARS = 2;
     private static final int PACK_TEXT_COLOR = 0xFF8FA8C8;
-    private static final int FOOTER_PACK_GAP = 28;
+    private static final int FOOTER_PACK_GAP = 50;
     private static final long TEMPORARY_EMPTY_MESSAGE_DURATION_MILLIS = 3000L;
     private static final long HEAD_DISPLAY_BUFFER_MILLIS = 1500L;
 
@@ -80,14 +79,19 @@ public final class WanderingTradesHeadsScreen extends Screen {
     private Button typeFilterButton;
     private SortMode sortMode = SortMode.NEWEST;
     private HeadType selectedType;
+    private WorldConfig.GridLayoutSize gridLayoutSize = WorldConfig.GridLayoutSize.DEFAULT;
     private Component loadedPackName = Component.translatable("footer.wanderingtradesmanager.nothing_loaded_pack");
     private Component emptyMessage = Component.translatable("text.wanderingtradesmanager.nothing_loaded");
     private Component temporaryEmptyMessage;
+    private int footerPackX;
+    private int footerPackY;
+    private int footerPackWidth;
+    private boolean footerPackVisible;
     private boolean waitingForHeadDisplayBuffer;
     private long headDisplayReadyMillis;
     private long temporaryEmptyMessageUntilMillis;
 
-    public WanderingTradesHeadsScreen(Screen parent) {
+    public HeadsScreen(Screen parent) {
         super(Component.translatable("screen.wanderingtradesmanager.heads.title"));
         this.parent = parent;
         ScreenPreferences preferences = ScreenPreferences.load();
@@ -98,6 +102,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
     @Override
     protected void init() {
         String previousSearch = this.searchBox == null ? "" : this.searchBox.getValue();
+        this.gridLayoutSize = WorldConfig.gridLayoutSize(this.minecraft.getSingleplayerServer());
         HeadsLayout layout = layout();
 
         this.searchBox = new EditBox(this.font, layout.searchX(), layout.searchY(), layout.searchWidth(), CONTROL_HEIGHT, Component.translatable("screen.wanderingtradesmanager.search"));
@@ -106,7 +111,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 .withStyle(ChatFormatting.ITALIC));
         this.searchBox.setMaxLength(128);
         this.searchBox.setValue(previousSearch);
-        this.searchBox.setResponder(ignored -> this.applyFilters());
+        this.searchBox.setResponder(ignored -> this.onSearchChanged());
         this.addRenderableWidget(this.searchBox);
 
         this.typeFilterButton = Button.builder(Component.empty(), button -> this.cycleTypeFilter())
@@ -123,13 +128,13 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 .bounds(layout.addX(), layout.buttonY(), layout.addWidth(), CONTROL_HEIGHT)
                 .build());
 
-        this.addRenderableWidget(Button.builder(Component.translatable("button.wanderingtradesmanager.open_folder"), button -> this.openDatapacksFolder())
-                .bounds(layout.openFolderX(), layout.buttonY(), layout.openFolderWidth(), CONTROL_HEIGHT)
+        this.addRenderableWidget(Button.builder(Component.translatable("button.wanderingtradesmanager.configure"), button -> this.openConfig())
+                .bounds(layout.configX(), layout.buttonY(), layout.configWidth(), CONTROL_HEIGHT)
                 .build());
 
         int gridHeight = Math.max(48, this.height - layout.gridTop() - FOOTER_HEIGHT);
-        int rowHeight = Math.max(MIN_ROW_HEIGHT, gridHeight / TARGET_VISIBLE_ROWS);
-        GridMetrics gridMetrics = GridMetrics.create(layout.rowWidth(), rowHeight);
+        int rowHeight = Math.max(this.gridLayoutSize.minRowHeight(), gridHeight / this.gridLayoutSize.visibleRows());
+        GridMetrics gridMetrics = GridMetrics.create(layout.rowWidth(), rowHeight, this.gridLayoutSize.columns());
         this.headList = new HeadList(this.minecraft, this.width, gridHeight, layout.gridTop(), gridMetrics);
         this.addRenderableWidget(this.headList);
 
@@ -166,7 +171,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
 
         Component count = Component.translatable("footer.wanderingtradesmanager.head_count", this.filteredHeads.size(), this.allHeads.size());
         Component pack = Component.translatable("footer.wanderingtradesmanager.loaded_pack", this.loadedPackName);
-        renderFooter(graphics, count, pack);
+        renderFooter(graphics, count, pack, mouseX, mouseY);
 
         if (this.filteredHeads.isEmpty()) {
             Component message = this.allHeads.isEmpty()
@@ -183,6 +188,16 @@ public final class WanderingTradesHeadsScreen extends Screen {
         return false;
     }
 
+    @Override
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        if (event.button() == 0 && isFooterPackHovered(event.x(), event.y())) {
+            openDatapacksFolder();
+            return true;
+        }
+
+        return super.mouseClicked(event, doubleClick);
+    }
+
     void reloadHeadsFromChild() {
         reloadHeads(true);
     }
@@ -192,7 +207,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
         this.temporaryEmptyMessageUntilMillis = System.currentTimeMillis() + TEMPORARY_EMPTY_MESSAGE_DURATION_MILLIS;
     }
 
-    private void renderFooter(GuiGraphicsExtractor graphics, Component count, Component pack) {
+    private void renderFooter(GuiGraphicsExtractor graphics, Component count, Component pack, int mouseX, int mouseY) {
         int availableWidth = Math.max(1, this.width - SCREEN_PADDING * 2);
         int countWidth = this.font.width(count.getString());
         int packX = SCREEN_PADDING + countWidth + FOOTER_PACK_GAP;
@@ -201,11 +216,35 @@ public final class WanderingTradesHeadsScreen extends Screen {
         graphics.text(this.font, count, SCREEN_PADDING, footerY, 0xFFB0B0B0);
 
         if (packX + 80 <= this.width - SCREEN_PADDING) {
-            graphics.text(this.font, fit(pack, this.width - SCREEN_PADDING - packX), packX, footerY, PACK_TEXT_COLOR);
+            renderClickablePackFooter(graphics, fit(pack, this.width - SCREEN_PADDING - packX), packX, footerY, mouseX, mouseY);
             return;
         }
 
-        graphics.text(this.font, fit(pack, availableWidth), SCREEN_PADDING, this.height - 24, PACK_TEXT_COLOR);
+        renderClickablePackFooter(graphics, fit(pack, availableWidth), SCREEN_PADDING, this.height - 24, mouseX, mouseY);
+    }
+
+    private void renderClickablePackFooter(GuiGraphicsExtractor graphics, Component pack, int x, int y, int mouseX, int mouseY) {
+        this.footerPackX = x;
+        this.footerPackY = y;
+        this.footerPackWidth = this.font.width(pack.getString());
+        this.footerPackVisible = this.footerPackWidth > 0;
+
+        boolean hovered = isFooterPackHovered(mouseX, mouseY);
+        Component renderedPack = hovered ? pack.copy().withStyle(ChatFormatting.UNDERLINE) : pack;
+        graphics.text(this.font, renderedPack, x, y, hovered ? 0xFFBBD7FF : PACK_TEXT_COLOR);
+
+        if (hovered) {
+            graphics.setComponentTooltipForNextFrame(
+                    this.font,
+                    List.of(Component.translatable("tooltip.wanderingtradesmanager.open_datapacks_folder")),
+                    mouseX,
+                    mouseY
+            );
+        }
+    }
+
+    private boolean isFooterPackHovered(double mouseX, double mouseY) {
+        return this.footerPackVisible && contains(mouseX, mouseY, this.footerPackX, this.footerPackY, this.footerPackWidth, this.font.lineHeight);
     }
 
     private Component currentEmptyMessage() {
@@ -226,11 +265,11 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 + CONTROL_GAP
                 + ADD_BUTTON_WIDTH
                 + CONTROL_GAP
-                + OPEN_FOLDER_BUTTON_WIDTH;
+                + CONFIGURE_BUTTON_WIDTH;
 
         if (availableWidth >= oneRowWidth) {
-            int openFolderX = this.width - SCREEN_PADDING - OPEN_FOLDER_BUTTON_WIDTH;
-            int addX = openFolderX - CONTROL_GAP - ADD_BUTTON_WIDTH;
+            int configX = this.width - SCREEN_PADDING - CONFIGURE_BUTTON_WIDTH;
+            int addX = configX - CONTROL_GAP - ADD_BUTTON_WIDTH;
             int sortX = addX - CONTROL_GAP - SORT_BUTTON_WIDTH;
             int typeX = sortX - CONTROL_GAP - TYPE_BUTTON_WIDTH;
             int searchWidth = Math.max(SEARCH_MIN_WIDTH, typeX - CONTROL_GAP - SCREEN_PADDING);
@@ -242,12 +281,12 @@ public final class WanderingTradesHeadsScreen extends Screen {
                     typeX,
                     sortX,
                     addX,
-                    openFolderX,
+                    configX,
                     CONTROL_TOP,
                     TYPE_BUTTON_WIDTH,
                     SORT_BUTTON_WIDTH,
                     ADD_BUTTON_WIDTH,
-                    OPEN_FOLDER_BUTTON_WIDTH,
+                    CONFIGURE_BUTTON_WIDTH,
                     gridTop,
                     Math.max(1, availableWidth - 8)
             );
@@ -256,13 +295,13 @@ public final class WanderingTradesHeadsScreen extends Screen {
         int buttonY = CONTROL_TOP + CONTROL_HEIGHT + CONTROL_GAP;
         int buttonSpace = Math.max(1, availableWidth - CONTROL_GAP * 3);
         int addWidth = Math.clamp(buttonSpace / 6, COMPACT_ADD_BUTTON_WIDTH, ADD_BUTTON_WIDTH);
-        int openFolderWidth = Math.clamp(buttonSpace / 5, COMPACT_OPEN_FOLDER_BUTTON_WIDTH, OPEN_FOLDER_BUTTON_WIDTH);
-        int filterWidth = Math.max(1, (buttonSpace - addWidth - openFolderWidth) / 2);
+        int configWidth = Math.clamp(buttonSpace / 5, COMPACT_CONFIGURE_BUTTON_WIDTH, CONFIGURE_BUTTON_WIDTH);
+        int filterWidth = Math.max(1, (buttonSpace - addWidth - configWidth) / 2);
         int typeX = SCREEN_PADDING;
         int sortX = typeX + filterWidth + CONTROL_GAP;
         int addX = sortX + filterWidth + CONTROL_GAP;
-        int openFolderX = addX + addWidth + CONTROL_GAP;
-        int openFolderRemainder = Math.max(1, this.width - SCREEN_PADDING - openFolderX);
+        int configX = addX + addWidth + CONTROL_GAP;
+        int configRemainder = Math.max(1, this.width - SCREEN_PADDING - configX);
         int gridTop = buttonY + CONTROL_HEIGHT + GRID_VERTICAL_GAP;
 
         return new HeadsLayout(
@@ -272,12 +311,12 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 typeX,
                 sortX,
                 addX,
-                openFolderX,
+                configX,
                 buttonY,
                 filterWidth,
                 filterWidth,
                 addWidth,
-                openFolderRemainder,
+                configRemainder,
                 gridTop,
                 Math.max(1, availableWidth - 8)
         );
@@ -314,6 +353,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
 
         this.allHeads.clear();
         this.allHeads.addAll(scan.heads());
+        switchUnavailableMiniatureFilterToAll();
         clearHeadCaches();
         this.loadedPackName = scan.matchingPacks().stream()
                 .findFirst()
@@ -368,6 +408,33 @@ public final class WanderingTradesHeadsScreen extends Screen {
         if (this.headList != null) {
             this.headList.setHeads(this.filteredHeads);
         }
+    }
+
+    private void onSearchChanged() {
+        applyFilters();
+        if (this.headList != null) {
+            this.headList.scrollToTop();
+        }
+    }
+
+    private void switchUnavailableMiniatureFilterToAll() {
+        if (this.selectedType != HeadType.MINIATURE || this.allHeads.isEmpty() || hasMiniatureHeads()) {
+            return;
+        }
+
+        this.selectedType = null;
+        savePreferences();
+        updateTypeFilterButton();
+    }
+
+    private boolean hasMiniatureHeads() {
+        for (CustomHead head : this.allHeads) {
+            if (head.type() == HeadType.MINIATURE) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private boolean matches(CustomHead head, String query) {
@@ -446,8 +513,17 @@ public final class WanderingTradesHeadsScreen extends Screen {
         return this.font.width(fullLabel.getString()) <= maxTextWidth ? fullLabel : compactLabel;
     }
 
+    private void openConfig() {
+        if (this.minecraft.getSingleplayerServer() == null) {
+            showTemporaryEmptyMessage(Component.translatable("text.wanderingtradesmanager.open_world_before_config").withStyle(ChatFormatting.RED));
+            return;
+        }
+
+        this.minecraft.setScreen(new ConfigScreen(this.parent));
+    }
+
     private void openDetails(CustomHead head) {
-        this.minecraft.setScreen(new WanderingTradesHeadDetailsScreen(this, head));
+        this.minecraft.setScreen(new HeadDetailsScreen(this, head));
     }
 
     private void openNewHead() {
@@ -456,13 +532,13 @@ public final class WanderingTradesHeadsScreen extends Screen {
             return;
         }
 
-        this.minecraft.setScreen(new WanderingTradesHeadDetailsScreen(this, null));
+        this.minecraft.setScreen(new HeadDetailsScreen(this, null));
     }
 
     private void openDatapacksFolder() {
         MinecraftServer server = this.minecraft.getSingleplayerServer();
         if (server == null) {
-            notifyPlayer(Component.translatable("text.wanderingtradesmanager.open_world_before_folder").withStyle(ChatFormatting.RED));
+            notifyPlayer(Component.translatable("text.wanderingtradesmanager.open_world_before_folder").withStyle(ChatFormatting.RED), true);
             return;
         }
 
@@ -471,13 +547,19 @@ public final class WanderingTradesHeadsScreen extends Screen {
             Files.createDirectories(datapacksDirectory);
             Util.getPlatform().openPath(datapacksDirectory);
         } catch (IOException | RuntimeException e) {
-            notifyPlayer(Component.translatable("message.wanderingtradesmanager.open_folder_failed", e.getMessage()).withStyle(ChatFormatting.RED));
+            notifyPlayer(Component.translatable("message.wanderingtradesmanager.open_folder_failed", e.getMessage()).withStyle(ChatFormatting.RED), true);
         }
     }
 
     private void notifyPlayer(Component message) {
+        notifyPlayer(message, false);
+    }
+
+    private void notifyPlayer(Component message, boolean error) {
         if (this.minecraft.player != null) {
-            this.minecraft.player.sendSystemMessage(message);
+            if (WorldConfig.chatInfoMessages().allows(error)) {
+                this.minecraft.player.sendSystemMessage(message);
+            }
             return;
         }
 
@@ -501,6 +583,10 @@ public final class WanderingTradesHeadsScreen extends Screen {
         return Component.literal(fit(value.getString(), maxWidth));
     }
 
+    private static boolean contains(double mouseX, double mouseY, int x, int y, int width, int height) {
+        return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
+    }
+
     private record HeadsLayout(
             int searchX,
             int searchY,
@@ -508,29 +594,29 @@ public final class WanderingTradesHeadsScreen extends Screen {
             int typeX,
             int sortX,
             int addX,
-            int openFolderX,
+            int configX,
             int buttonY,
             int typeWidth,
             int sortWidth,
             int addWidth,
-            int openFolderWidth,
+            int configWidth,
             int gridTop,
             int rowWidth
     ) {
     }
 
     private record GridMetrics(int rowWidth, int rowHeight, int tileWidth, int tileHeight, int columns) {
-        private static GridMetrics create(int rowWidth, int rowHeight) {
-            int columns = columnsFor(rowWidth);
+        private static GridMetrics create(int rowWidth, int rowHeight, int targetColumns) {
+            int columns = columnsFor(rowWidth, targetColumns);
             int tileWidth = Math.max(1, (rowWidth - TILE_GAP * (columns - 1)) / columns);
             int tileHeight = Math.max(1, rowHeight - 4);
             return new GridMetrics(rowWidth, rowHeight, tileWidth, tileHeight, columns);
         }
 
-        private static int columnsFor(int rowWidth) {
-            int targetWidth = TARGET_COLUMNS * MIN_TILE_WIDTH + TILE_GAP * (TARGET_COLUMNS - 1);
+        private static int columnsFor(int rowWidth, int targetColumns) {
+            int targetWidth = targetColumns * MIN_TILE_WIDTH + TILE_GAP * (targetColumns - 1);
             if (rowWidth >= targetWidth) {
-                return TARGET_COLUMNS;
+                return targetColumns;
             }
 
             return Math.max(1, (rowWidth + TILE_GAP) / (MIN_TILE_WIDTH + TILE_GAP));
@@ -686,6 +772,10 @@ public final class WanderingTradesHeadsScreen extends Screen {
             }
         }
 
+        private void scrollToTop() {
+            this.setScrollAmount(0.0D);
+        }
+
         @Override
         public int getRowWidth() {
             return this.metrics.rowWidth();
@@ -744,7 +834,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
                         for (int lineIndex = 0; lineIndex < tile.nameLines().size(); lineIndex++) {
                             scaledCenteredText(
                                     graphics,
-                                    WanderingTradesHeadsScreen.this.font,
+                                    HeadsScreen.this.font,
                                     tile.nameLines().get(lineIndex),
                                     x + tileWidth / 2,
                                     nameY + lineIndex * tile.nameLineHeight(),
@@ -756,7 +846,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
 
                     if (tileHovered) {
                         graphics.setComponentTooltipForNextFrame(
-                                WanderingTradesHeadsScreen.this.font,
+                                HeadsScreen.this.font,
                                 tile.tooltip(),
                                 mouseX,
                                 mouseY
@@ -773,7 +863,7 @@ public final class WanderingTradesHeadsScreen extends Screen {
 
                 CustomHead clicked = headAt(event.x(), event.y());
                 if (clicked != null) {
-                    WanderingTradesHeadsScreen.this.openDetails(clicked);
+                    HeadsScreen.this.openDetails(clicked);
                     return true;
                 }
 
@@ -808,10 +898,11 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 }
 
                 int maxNameWidth = Math.max(1, tileWidth - 8);
-                float nameScale = chooseNameScale(head.name(), maxNameWidth, Math.max(8, tileHeight - 24));
-                List<Component> nameLines = wrap(head.name(), Math.round(maxNameWidth / nameScale)).stream()
+                NameLayout nameLayout = layoutName(head.name(), maxNameWidth, Math.max(8, tileHeight - 24));
+                List<Component> nameLines = nameLayout.lines().stream()
                         .map(line -> (Component) Component.literal(line))
                         .toList();
+                float nameScale = nameLayout.scale();
                 int nameLineHeight = Math.max(7, Math.round(10 * nameScale));
                 int reservedNameLines = Math.max(RESERVED_NAME_LINES, nameLines.size());
                 int reservedLabelHeight = reservedNameLines * nameLineHeight + 3;
@@ -823,25 +914,79 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 return Math.clamp(availableSize - ICON_SIZE_TRIM, ITEM_BASE_SIZE, MAX_ICON_SIZE);
             }
 
-            private boolean contains(double mouseX, double mouseY, int x, int y, int width, int height) {
-                return mouseX >= x && mouseX < x + width && mouseY >= y && mouseY < y + height;
-            }
-
-            private float chooseNameScale(String value, int maxWidth, int maxHeight) {
+            private NameLayout layoutName(String value, int maxWidth, int maxHeight) {
                 int steps = Math.round((MAX_NAME_SCALE - MIN_NAME_SCALE) / NAME_SCALE_STEP);
                 for (int step = 0; step <= steps; step++) {
                     float scale = MAX_NAME_SCALE - step * NAME_SCALE_STEP;
-                    int lineHeight = Math.max(7, Math.round(10 * scale));
-                    int scaledWidth = Math.max(1, Math.round(maxWidth / scale));
-                    if (wrap(value, scaledWidth).size() <= RESERVED_NAME_LINES && RESERVED_NAME_LINES * lineHeight <= maxHeight) {
-                        return scale;
+                    NameLayout layout = layoutName(value, maxWidth, maxHeight, scale, false);
+                    if (layout != null) {
+                        return layout;
                     }
                 }
 
-                return MIN_NAME_SCALE;
+                int scaledWidth = Math.max(1, Math.round(maxWidth / MIN_NAME_SCALE));
+                int overflowChars = maxUnbreakableOverflowChars(value, scaledWidth);
+                if (overflowChars > 0 && overflowChars <= LONG_WORD_WRAP_OVERFLOW_CHARS) {
+                    int emergencySteps = Math.round((MIN_NAME_SCALE - EMERGENCY_MIN_NAME_SCALE) / NAME_SCALE_STEP);
+                    for (int step = 1; step <= emergencySteps; step++) {
+                        float scale = MIN_NAME_SCALE - step * NAME_SCALE_STEP;
+                        NameLayout layout = layoutName(value, maxWidth, maxHeight, scale, false);
+                        if (layout != null) {
+                            return layout;
+                        }
+                    }
+                }
+
+                float scale = MIN_NAME_SCALE;
+                int lineHeight = Math.max(7, Math.round(10 * scale));
+                List<String> lines = wrap(value, scaledWidth, true);
+                int maxLines = Math.max(RESERVED_NAME_LINES, Math.max(1, maxHeight / lineHeight));
+                return new NameLayout(fitLineCount(lines, maxLines, scaledWidth), scale);
             }
 
-            private List<String> wrap(String value, int maxWidth) {
+            private NameLayout layoutName(String value, int maxWidth, int maxHeight, float scale, boolean forceBreakLongWords) {
+                int lineHeight = Math.max(7, Math.round(10 * scale));
+                int scaledWidth = Math.max(1, Math.round(maxWidth / scale));
+                List<String> lines = wrap(value, scaledWidth, forceBreakLongWords);
+                if (lines.size() <= RESERVED_NAME_LINES && linesFit(lines, scaledWidth) && RESERVED_NAME_LINES * lineHeight <= maxHeight) {
+                    return new NameLayout(lines, scale);
+                }
+
+                return null;
+            }
+
+            private boolean linesFit(List<String> lines, int maxWidth) {
+                for (String line : lines) {
+                    if (HeadsScreen.this.font.width(line) > maxWidth) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            private int maxUnbreakableOverflowChars(String value, int maxWidth) {
+                int overflow = 0;
+                if (value == null || value.isBlank()) {
+                    return overflow;
+                }
+
+                for (String word : value.trim().split("[\\s-]+")) {
+                    overflow = Math.max(overflow, overflowChars(word, maxWidth));
+                }
+
+                return overflow;
+            }
+
+            private int overflowChars(String value, int maxWidth) {
+                if (value == null || value.isBlank() || HeadsScreen.this.font.width(value) <= maxWidth) {
+                    return 0;
+                }
+
+                return value.length() - HeadsScreen.this.font.plainSubstrByWidth(value, maxWidth).length();
+            }
+
+            private List<String> wrap(String value, int maxWidth, boolean forceBreakLongWords) {
                 if (value == null || value.isBlank()) {
                     return List.of();
                 }
@@ -850,16 +995,24 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 String remaining = value.trim();
 
                 while (!remaining.isEmpty()) {
-                    if (WanderingTradesHeadsScreen.this.font.width(remaining) <= maxWidth) {
+                    if (HeadsScreen.this.font.width(remaining) <= maxWidth) {
                         lines.add(remaining);
                         break;
                     }
 
-                    String line = WanderingTradesHeadsScreen.this.font.plainSubstrByWidth(remaining, maxWidth);
+                    String line = HeadsScreen.this.font.plainSubstrByWidth(remaining, maxWidth);
                     int breakAt = Math.max(line.lastIndexOf(' '), line.lastIndexOf('-'));
                     if (breakAt > 0) {
                         int breakLength = line.charAt(breakAt) == '-' ? breakAt + 1 : breakAt;
                         line = line.substring(0, breakLength).trim();
+                    } else {
+                        String firstWord = firstUnbreakableChunk(remaining);
+                        if (forceBreakLongWords && overflowChars(firstWord, maxWidth) > LONG_WORD_WRAP_OVERFLOW_CHARS) {
+                            line = HeadsScreen.this.font.plainSubstrByWidth(remaining, maxWidth).trim();
+                        } else {
+                            int nextBreak = nextBreakIndex(remaining);
+                            line = nextBreak > 0 ? remaining.substring(0, nextBreak).trim() : remaining;
+                        }
                     }
 
                     if (line.isBlank()) {
@@ -873,11 +1026,52 @@ public final class WanderingTradesHeadsScreen extends Screen {
                 return lines;
             }
 
+            private String firstUnbreakableChunk(String value) {
+                int nextBreak = nextBreakIndex(value);
+                if (nextBreak < 0) {
+                    return value;
+                }
+
+                return value.substring(0, nextBreak).trim();
+            }
+
+            private List<String> fitLineCount(List<String> lines, int maxLines, int maxWidth) {
+                if (lines.size() <= maxLines) {
+                    return lines;
+                }
+
+                List<String> fitted = new ArrayList<>(lines.subList(0, Math.max(1, maxLines)));
+                int lastIndex = fitted.size() - 1;
+                fitted.set(lastIndex, ellipsize(fitted.get(lastIndex), maxWidth));
+                return fitted;
+            }
+
+            private String ellipsize(String value, int maxWidth) {
+                int ellipsisWidth = HeadsScreen.this.font.width("...");
+                return HeadsScreen.this.font.plainSubstrByWidth(value, Math.max(1, maxWidth - ellipsisWidth)) + "...";
+            }
+
+            private int nextBreakIndex(String value) {
+                int space = value.indexOf(' ');
+                int hyphen = value.indexOf('-');
+                if (space < 0) {
+                    return hyphen < 0 ? -1 : hyphen + 1;
+                }
+                if (hyphen < 0) {
+                    return space;
+                }
+
+                return Math.min(space, hyphen + 1);
+            }
+
             private void scaledCenteredText(GuiGraphicsExtractor graphics, net.minecraft.client.gui.Font font, Component text, int centerX, int y, float scale, int color) {
                 graphics.pose().pushMatrix();
                 graphics.pose().scale(scale, scale);
                 graphics.centeredText(font, text, Math.round(centerX / scale), Math.round(y / scale), color);
                 graphics.pose().popMatrix();
+            }
+
+            private record NameLayout(List<String> lines, float scale) {
             }
 
             private record HeadTile(CustomHead head, ItemStack stack, List<Component> nameLines, float nameScale, int nameLineHeight, int reservedLabelHeight, List<Component> tooltip) {

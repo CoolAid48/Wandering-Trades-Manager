@@ -1,18 +1,15 @@
 package me.coolaid.wanderingTradesManager.client.gui;
 
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.textures.GpuSampler;
 import me.coolaid.wanderingTradesManager.WanderingTradesManager;
 import me.coolaid.wanderingTradesManager.data.CustomHead;
 import me.coolaid.wanderingTradesManager.data.DatapackEditResult;
+import me.coolaid.wanderingTradesManager.parser.HeadCommandParser;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.renderer.texture.AbstractTexture;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.PlayerSkin;
@@ -22,12 +19,12 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-public final class WanderingTradesHeadDetailsScreen extends Screen {
+public final class HeadDetailsScreen extends Screen {
     private static final int FIELD_TOP = 108;
     private static final int FIELD_VERTICAL_GAP = 46;
     private static final int FIELD_HEIGHT = 20;
     private static final int FIELD_LABEL_OFFSET = 12;
-    private static final int BUTTON_WIDTH = 180;
+    private static final int BUTTON_WIDTH = 220;
     private static final int BUTTON_HEIGHT = 20;
     private static final int BUTTON_GAP = 3;
     private static final int BUTTON_TOP_GAP = 42;
@@ -35,11 +32,11 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
     private static final int TEXTURE_HELP_GAP = 6;
     private static final int HELP_ACTION_GAP = 8;
     private static final int HEAD_PREVIEW_SIZE = 48;
+    private static final int MIN_HEAD_PREVIEW_SIZE = 24;
     private static final int PREVIEW_Y = 40;
     private static final int MIN_FIELD_TOP = 48;
-    private static final float SKIN_TEXTURE_SIZE = 64.0F;
 
-    private final WanderingTradesHeadsScreen parent;
+    private final HeadsScreen parent;
     private final CustomHead head;
     private final boolean creating;
 
@@ -49,9 +46,11 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
     private Button copyTextureButton;
     private Button deleteButton;
     private Button doneButton;
+    private CustomHead previewHead;
+    private String previewTextureValue = "";
     private CompletableFuture<Optional<PlayerSkin>> skinFuture;
 
-    public WanderingTradesHeadDetailsScreen(WanderingTradesHeadsScreen parent, CustomHead head) {
+    public HeadDetailsScreen(HeadsScreen parent, CustomHead head) {
         super(Component.translatable(head == null ? "screen.wanderingtradesmanager.add_head" : "screen.wanderingtradesmanager.head_details"));
         this.parent = parent;
         this.head = head;
@@ -68,12 +67,14 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
         this.nameField.setHint(italic("placeholder.wanderingtradesmanager.head_name"));
         this.nameField.setMaxLength(96);
         this.nameField.setValue(this.head == null ? "" : this.head.name());
+        this.nameField.setResponder(ignored -> this.updatePreviewHead());
         this.addRenderableWidget(this.nameField);
 
         this.textureField = new EditBox(this.font, layout.formX(), layout.textureFieldY(), layout.formWidth(), FIELD_HEIGHT, Component.translatable("screen.wanderingtradesmanager.texture"));
         this.textureField.setHint(italic("placeholder.wanderingtradesmanager.texture_value"));
         this.textureField.setMaxLength(4096);
         this.textureField.setValue(this.head == null ? "" : this.head.textureValue());
+        this.textureField.setResponder(ignored -> this.updatePreviewHead());
         this.addRenderableWidget(this.textureField);
 
         this.saveButton = Button.builder(green(this.creating ? "button.wanderingtradesmanager.add_head" : "button.wanderingtradesmanager.save"), button -> this.save())
@@ -102,6 +103,8 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
 
         if (!this.creating) {
             this.skinFuture = this.minecraft.getSkinManager().get(HeadItemFactory.createProfile(this.head));
+        } else {
+            updatePreviewHead();
         }
     }
 
@@ -123,7 +126,7 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
         graphics.centeredText(this.font, this.title.copy().withStyle(style -> style.withBold(true)), layout.centerX(), 16, 0xFFFFFFFF);
 
         if (layout.showPreview()) {
-            renderHeadPreview(graphics, layout.centerX() - HEAD_PREVIEW_SIZE / 2, PREVIEW_Y);
+            renderHeadPreview(graphics, layout.centerX() - layout.previewSize() / 2, PREVIEW_Y, layout.previewSize());
         }
 
         graphics.text(this.font, Component.translatable("screen.wanderingtradesmanager.name"), layout.formX(), layout.nameLabelY(), 0xFFFFFFFF);
@@ -153,21 +156,16 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
         int maxActionY = preferredDoneY - BUTTON_GAP - buttonStackHeight;
         int actionOffset = actionOffsetFromNameField();
 
-        boolean showPreview = !this.creating;
-        int minFieldTop = minimumFieldTop(showPreview);
         int maxFieldTop = maxActionY - actionOffset;
-        if (showPreview && maxFieldTop < minFieldTop) {
-            showPreview = false;
-            minFieldTop = minimumFieldTop(false);
-            maxFieldTop = maxActionY - actionOffset;
-        }
+        int previewSize = previewSize(maxFieldTop);
+        int minFieldTop = minimumFieldTop(previewSize);
 
         int fieldTop = Math.clamp(FIELD_TOP, minFieldTop, Math.max(minFieldTop, maxFieldTop));
         int textureFieldY = fieldTop + FIELD_VERTICAL_GAP;
         int actionY = textureFieldY + (this.creating ? FIELD_HEIGHT + TEXTURE_HELP_GAP + this.font.lineHeight + HELP_ACTION_GAP : BUTTON_TOP_GAP);
         int doneY = Math.max(preferredDoneY, actionY + buttonStackHeight + BUTTON_GAP);
 
-        return new DetailsLayout(centerX, centerX - formWidth / 2, formWidth, buttonX, buttonWidth, fieldTop, textureFieldY, actionY, doneY, showPreview);
+        return new DetailsLayout(centerX, centerX - formWidth / 2, formWidth, buttonX, buttonWidth, fieldTop, textureFieldY, actionY, doneY, previewSize);
     }
 
     private void applyLayout() {
@@ -199,26 +197,41 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
                 : BUTTON_TOP_GAP);
     }
 
-    private static int minimumFieldTop(boolean showPreview) {
-        return showPreview ? PREVIEW_Y + HEAD_PREVIEW_SIZE + FIELD_LABEL_OFFSET + 8 : MIN_FIELD_TOP;
+    private int previewSize(int maxFieldTop) {
+        if (previewHead() == null) {
+            return 0;
+        }
+
+        int availablePreviewSize = maxFieldTop - PREVIEW_Y - FIELD_LABEL_OFFSET - 8;
+        return Math.clamp(availablePreviewSize, MIN_HEAD_PREVIEW_SIZE, HEAD_PREVIEW_SIZE);
     }
 
-    private void renderHeadPreview(GuiGraphicsExtractor graphics, int x, int y) {
+    private static int minimumFieldTop(int previewSize) {
+        return previewSize > 0 ? PREVIEW_Y + previewSize + FIELD_LABEL_OFFSET + 8 : MIN_FIELD_TOP;
+    }
+
+    private void renderHeadPreview(GuiGraphicsExtractor graphics, int x, int y, int size) {
+        CustomHead previewHead = previewHead();
+        if (previewHead == null) {
+            return;
+        }
+
         Identifier skinTexture = resolvedSkinTexture();
         if (skinTexture == null) {
-            ItemStack stack = HeadItemFactory.create(this.head);
+            ItemStack stack = HeadItemFactory.create(previewHead);
             graphics.pose().pushMatrix();
             graphics.pose().translate(x, y);
-            graphics.pose().scale(HEAD_PREVIEW_SIZE / 16.0F, HEAD_PREVIEW_SIZE / 16.0F);
+            graphics.pose().scale(size / 16.0F, size / 16.0F);
             graphics.item(stack, 0, 0);
             graphics.pose().popMatrix();
             return;
         }
 
-        AbstractTexture texture = this.minecraft.getTextureManager().getTexture(skinTexture);
-        var sampler = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
-        blitSkinFace(graphics, texture, sampler, x, y, 8.0F, 8.0F);
-        blitSkinFace(graphics, texture, sampler, x, y, 40.0F, 8.0F);
+        HeadFaceRenderer.render(graphics, this.minecraft, skinTexture, x, y, size);
+    }
+
+    private CustomHead previewHead() {
+        return this.creating ? this.previewHead : this.head;
     }
 
     private Identifier resolvedSkinTexture() {
@@ -230,21 +243,6 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
                 .map(PlayerSkin::body)
                 .map(body -> body.texturePath())
                 .orElse(null);
-    }
-
-    private static void blitSkinFace(GuiGraphicsExtractor graphics, AbstractTexture texture, GpuSampler sampler, int x, int y, float u, float v) {
-        graphics.blit(
-                texture.getTextureView(),
-                sampler,
-                x,
-                y,
-                x + HEAD_PREVIEW_SIZE,
-                y + HEAD_PREVIEW_SIZE,
-                u / SKIN_TEXTURE_SIZE,
-                (u + 8.0F) / SKIN_TEXTURE_SIZE,
-                v / SKIN_TEXTURE_SIZE,
-                (v + 8.0F) / SKIN_TEXTURE_SIZE
-        );
     }
 
     private void renderAddTextureHelp(GuiGraphicsExtractor graphics, int mouseX, int mouseY, DetailsLayout layout) {
@@ -308,11 +306,58 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
             return;
         }
 
-        handleResult(WanderingTradesManager.datapackManager().removeHead(this.head));
+        if (WorldConfig.removeHeadWarningEnabled()) {
+            this.minecraft.setScreen(new RemoveHeadConfirmScreen(this));
+            return;
+        }
+
+        confirmRemoveHead();
+    }
+
+    private void updatePreviewHead() {
+        if (!this.creating || this.textureField == null) {
+            return;
+        }
+
+        boolean hadPreview = this.previewHead != null;
+        this.previewHead = parsePreviewHead();
+        String textureValue = this.previewHead == null ? "" : this.previewHead.textureValue();
+        if (!this.previewTextureValue.equals(textureValue)) {
+            this.previewTextureValue = textureValue;
+            this.skinFuture = this.previewHead == null
+                    ? null
+                    : this.minecraft.getSkinManager().get(HeadItemFactory.createProfile(this.previewHead));
+        }
+
+        if (hadPreview != (this.previewHead != null)) {
+            applyLayout();
+        }
+    }
+
+    private CustomHead parsePreviewHead() {
+        try {
+            CustomHead parsed = HeadCommandParser.parseBase64String(this.textureField.getValue());
+            String name = this.nameField == null || this.nameField.getValue().isBlank()
+                    ? parsed.name()
+                    : this.nameField.getValue().trim();
+            return new CustomHead(name, parsed.textureValue(), -1, "", "", parsed.type());
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    void confirmRemoveHead() {
+        if (this.head != null) {
+            handleResult(WanderingTradesManager.datapackManager().removeHead(this.head));
+        }
+    }
+
+    CustomHead head() {
+        return this.head;
     }
 
     private void handleResult(DatapackEditResult result) {
-        notifyPlayer(result.message());
+        notifyPlayer(result.message(), result.failed());
         if (result.changed()) {
             this.parent.reloadHeadsFromChild();
             this.minecraft.setScreen(this.parent);
@@ -329,8 +374,14 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
     }
 
     private void notifyPlayer(Component message) {
+        notifyPlayer(message, false);
+    }
+
+    private void notifyPlayer(Component message, boolean error) {
         if (this.minecraft.player != null) {
-            this.minecraft.player.sendSystemMessage(message);
+            if (WorldConfig.chatInfoMessages().allows(error)) {
+                this.minecraft.player.sendSystemMessage(message);
+            }
             return;
         }
 
@@ -356,7 +407,11 @@ public final class WanderingTradesHeadDetailsScreen extends Screen {
                 .withStyle(ChatFormatting.ITALIC);
     }
 
-    private record DetailsLayout(int centerX, int formX, int formWidth, int buttonX, int buttonWidth, int nameFieldY, int textureFieldY, int actionButtonsY, int doneButtonY, boolean showPreview) {
+    private record DetailsLayout(int centerX, int formX, int formWidth, int buttonX, int buttonWidth, int nameFieldY, int textureFieldY, int actionButtonsY, int doneButtonY, int previewSize) {
+        private boolean showPreview() {
+            return previewSize > 0;
+        }
+
         private int nameLabelY() {
             return nameFieldY - FIELD_LABEL_OFFSET;
         }

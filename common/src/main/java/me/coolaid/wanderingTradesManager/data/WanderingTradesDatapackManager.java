@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.serialization.JsonOps;
+import me.coolaid.wanderingTradesManager.WanderingTradesManager;
 import me.coolaid.wanderingTradesManager.parser.HeadCommandParser;
 import net.minecraft.ChatFormatting;
 import net.minecraft.SharedConstants;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -42,16 +44,24 @@ public final class WanderingTradesDatapackManager {
             "data/wandering_trades/function/add_trade.mcfunction",
             "data/wandering_trades/functions/add_trade.mcfunction"
     );
+    private static final String PROVIDE_HERMIT_TRADES = "provide_hermit_trades.mcfunction";
+    private static final String PROVIDE_BLOCK_TRADES = "provide_block_trades.mcfunction";
     private static final List<String> PROVIDE_TRADE_FUNCTION_NAMES = List.of(
-            "provide_hermit_trades.mcfunction",
-            "provide_block_trades.mcfunction"
+            PROVIDE_HERMIT_TRADES,
+            PROVIDE_BLOCK_TRADES
     );
     private static final String PACK_MCMETA = "pack.mcmeta";
     private static final String OVERLAYS_KEY = "overlays";
     private static final Pattern TRADE_INDEX_PATTERN = Pattern.compile("execute\\s+if\\s+score\\s+@s\\s+wt_tradeIndex\\s+matches\\s+(\\d+)");
+    private static final Pattern TRADE_ENTRY_START_PATTERN = Pattern.compile("(?m)^\\s*execute\\s+if\\s+score\\s+@s\\s+wt_tradeIndex\\s+matches\\s+\\d+");
     private static final Pattern RANDOM_RANGE_PATTERN = Pattern.compile("(?m)(^\\s*(?!#)[^\\r\\n]*\\bwt_tradeIndex\\b[^\\r\\n]*\\brandom\\s+value\\s+)(\\d+)\\.\\.(\\d+)");
+    private static final Pattern ANY_RANDOM_RANGE_PATTERN = Pattern.compile("(?im)^\\s*(?!#)([^\\r\\n]*\\brandom\\s+value\\s+)(\\d+)\\.\\.(\\d+)([^\\r\\n]*)$");
     private static final Pattern ITEM_NAME_ASSIGNMENT_PATTERN = Pattern.compile("(\"minecraft:(?:item_name|custom_name)\"\\s*:\\s*)(?:'[^']*'|\"[^\"]*\")");
     private static final Pattern TEXTURE_ASSIGNMENT_PATTERN = Pattern.compile("(value\\s*:\\s*\")([A-Za-z0-9+/=]+)(\")");
+    private static final Pattern MAX_USES_PATTERN = Pattern.compile("(maxUses\\s*:\\s*)(\\d+)");
+    private static final Pattern EMERALD_BUY_PATTERN = Pattern.compile("(buy\\s*:\\s*\\{[^}\\r\\n]*id\\s*:\\s*\"minecraft:emerald\"[^}\\r\\n]*})");
+    private static final Pattern COUNT_PATTERN = Pattern.compile("(count\\s*:\\s*)(\\d+)");
+    private static final Pattern SETTING_CONTEXT_PATTERN = Pattern.compile("(?i)custom|head|trade");
     private static final String TEMP_PACK_PREFIX = "wtm_edit_";
     private static final String TEMP_PACK_SUFFIX = ".wtm-tmp";
 
@@ -218,6 +228,38 @@ public final class WanderingTradesDatapackManager {
         }
     }
 
+    public TradeSettings tradeSettings() {
+        Optional<EditableFunction> target = findPrimaryEditableFunction();
+        if (target.isEmpty()) {
+            return TradeSettings.fallback();
+        }
+
+        try {
+            return readTradeSettings(target.get());
+        } catch (IOException e) {
+            WanderingTradesManager.LOGGER.warn("Failed to read Wandering Trades metadata", e);
+            return TradeSettings.fallback();
+        }
+    }
+
+    public DatapackEditResult updateTradeSettings(TradeSettings settings) {
+        Optional<EditableFunction> target = findPrimaryEditableFunction();
+        if (target.isEmpty()) {
+            return DatapackEditResult.failure(message("no_editable_function"));
+        }
+
+        try {
+            boolean changed = editTradeSettings(target.get(), settings);
+            if (!changed) {
+                return DatapackEditResult.unchanged(message("no_changes"));
+            }
+            refresh(lastScan.datapacksDirectory());
+            return DatapackEditResult.success(message(ChatFormatting.GREEN, "updated_config"));
+        } catch (IOException e) {
+            return DatapackEditResult.failure(message("config_update_failed", e.getMessage()));
+        }
+    }
+
     public DatapackScanResult lastScan() {
         return lastScan;
     }
@@ -236,6 +278,50 @@ public final class WanderingTradesDatapackManager {
         }
 
         return Optional.empty();
+    }
+
+    private static TradeSettings readTradeSettings(EditableFunction target) throws IOException {
+        return readPack(target.pack(), root -> {
+            Path function = resolve(root, target.functionPath());
+            String content = Files.readString(function, StandardCharsets.UTF_8);
+            Optional<String> firstEntry = firstEntry(content);
+            int emeraldCost = firstEntry.map(WanderingTradesDatapackManager::emeraldCost).orElse(1);
+            int maxUses = firstEntry.map(WanderingTradesDatapackManager::maxUses).orElse(1);
+            Optional<CustomHeadCountRange> customHeadRange = findCustomHeadCountRange(root, target.functionPath());
+            return new TradeSettings(
+                    emeraldCost,
+                    maxUses,
+                    customHeadRange.map(range -> OptionalInt.of(range.min())).orElseGet(OptionalInt::empty),
+                    customHeadRange.map(range -> OptionalInt.of(range.max())).orElseGet(OptionalInt::empty)
+            );
+        });
+    }
+
+    private static boolean editTradeSettings(EditableFunction target, TradeSettings settings) throws IOException {
+        return editPack(target.pack(), root -> {
+            Path function = resolve(root, target.functionPath());
+            String content = Files.readString(function, StandardCharsets.UTF_8);
+            String updated = formatTradeEntrySpacing(updateTradeEntries(content, settings));
+            boolean changed = !content.equals(updated);
+            if (changed) {
+                writeString(function, updated);
+                updateTradeRanges(root, target, updated);
+            }
+
+            if (settings.hasCustomHeadRange()) {
+                Optional<CustomHeadCountRange> customHeadRange = findCustomHeadCountRange(root, target.functionPath());
+                if (customHeadRange.isPresent()) {
+                    CustomHeadCountRange range = customHeadRange.get();
+                    String rangeUpdated = replaceRandomRange(range, settings.minCustomHeads().getAsInt(), settings.maxCustomHeads().getAsInt());
+                    if (!range.content().equals(rangeUpdated)) {
+                        writeString(range.file(), rangeUpdated);
+                        changed = true;
+                    }
+                }
+            }
+
+            return changed;
+        });
     }
 
     private Optional<EditableFunction> editableFunctionFor(CustomHead head) {
@@ -514,11 +600,24 @@ public final class WanderingTradesDatapackManager {
         }
     }
 
+    private static <T> T readPack(Path pack, PackReader<T> reader) throws IOException {
+        if (Files.isDirectory(pack)) {
+            return reader.read(pack);
+        }
+
+        if (!isZip(pack)) {
+            throw new IOException("Not a folder or zip datapack: " + pack.getFileName());
+        }
+
+        URI uri = URI.create("jar:" + pack.toUri());
+        return withZipRoot(uri, reader::read);
+    }
+
     private static boolean editFunction(EditableFunction target, FunctionContentEdit edit) throws IOException {
         return editPack(target.pack(), root -> {
             Path function = resolve(root, target.functionPath());
             String content = Files.readString(function, StandardCharsets.UTF_8);
-            String updated = edit.apply(content);
+            String updated = formatTradeEntrySpacing(edit.apply(content));
             if (content.equals(updated)) {
                 return false;
             }
@@ -607,6 +706,42 @@ public final class WanderingTradesDatapackManager {
         return content.contains("\r\n") ? "\r\n" : System.lineSeparator();
     }
 
+    private static String formatTradeEntrySpacing(String content) {
+        Matcher matcher = TRADE_ENTRY_START_PATTERN.matcher(content);
+        if (!matcher.find()) {
+            return content;
+        }
+
+        String lineSeparator = lineSeparator(content);
+        StringBuilder formatted = new StringBuilder(content.length());
+        int lastAppend = 0;
+        boolean firstEntry = true;
+
+        do {
+            if (firstEntry) {
+                firstEntry = false;
+                continue;
+            }
+
+            int entryStart = matcher.start();
+            int separatorStart = entryStart;
+            while (separatorStart > lastAppend) {
+                char previous = content.charAt(separatorStart - 1);
+                if (previous != '\n' && previous != '\r') {
+                    break;
+                }
+                separatorStart--;
+            }
+
+            formatted.append(content, lastAppend, separatorStart);
+            formatted.append(lineSeparator).append(lineSeparator);
+            lastAppend = entryStart;
+        } while (matcher.find());
+
+        formatted.append(content, lastAppend, content.length());
+        return formatted.toString();
+    }
+
     private static int maxTradeIndex(String content, int fallback) {
         int max = fallback;
         Matcher matcher = TRADE_INDEX_PATTERN.matcher(content);
@@ -634,6 +769,91 @@ public final class WanderingTradesDatapackManager {
         return textureMatcher.find()
                 ? textureMatcher.replaceFirst(Matcher.quoteReplacement(textureMatcher.group(1) + textureValue + textureMatcher.group(3)))
                 : generateTradeEntry(tradeIndex, name, textureValue);
+    }
+
+    private static Optional<String> firstEntry(String content) {
+        Matcher matcher = TRADE_INDEX_PATTERN.matcher(content);
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+
+        int[] span = findEntrySpan(content, Integer.parseInt(matcher.group(1)));
+        return span == null ? Optional.empty() : Optional.of(content.substring(span[0], span[1]));
+    }
+
+    private static int maxUses(String entry) {
+        Matcher matcher = MAX_USES_PATTERN.matcher(entry);
+        return matcher.find() ? Integer.parseInt(matcher.group(2)) : 1;
+    }
+
+    private static int emeraldCost(String entry) {
+        Matcher emeraldMatcher = EMERALD_BUY_PATTERN.matcher(entry);
+        if (!emeraldMatcher.find()) {
+            return 1;
+        }
+
+        Matcher countMatcher = COUNT_PATTERN.matcher(emeraldMatcher.group(1));
+        return countMatcher.find() ? Integer.parseInt(countMatcher.group(2)) : 1;
+    }
+
+    private static String updateTradeEntries(String content, TradeSettings settings) {
+        StringBuilder updated = new StringBuilder(content.length());
+        Matcher matcher = TRADE_INDEX_PATTERN.matcher(content);
+        int start = -1;
+        int lastAppend = 0;
+
+        while (matcher.find()) {
+            if (start >= 0) {
+                updated.append(content, lastAppend, start);
+                updated.append(updateTradeMetadata(content.substring(start, matcher.start()), settings));
+                lastAppend = matcher.start();
+            }
+            start = matcher.start();
+        }
+
+        if (start < 0) {
+            return content;
+        }
+
+        updated.append(content, lastAppend, start);
+        updated.append(updateTradeMetadata(content.substring(start), settings));
+        return updated.toString();
+    }
+
+    private static String updateTradeMetadata(String entry, TradeSettings settings) {
+        String updated = replaceMaxUses(entry, Math.max(1, settings.maxUses()));
+        return replaceEmeraldCost(updated, Math.max(1, settings.emeraldCost()));
+    }
+
+    private static String replaceMaxUses(String entry, int maxUses) {
+        Matcher matcher = MAX_USES_PATTERN.matcher(entry);
+        if (matcher.find()) {
+            return matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + maxUses));
+        }
+
+        int tradeStart = entry.indexOf('{');
+        return tradeStart < 0 ? entry : entry.substring(0, tradeStart + 1) + "maxUses:" + maxUses + "," + entry.substring(tradeStart + 1);
+    }
+
+    private static String replaceEmeraldCost(String entry, int emeraldCost) {
+        Matcher matcher = EMERALD_BUY_PATTERN.matcher(entry);
+        if (!matcher.find()) {
+            return entry;
+        }
+
+        String buy = matcher.group(1);
+        String updatedBuy = replaceCount(buy, emeraldCost);
+        return entry.substring(0, matcher.start(1)) + updatedBuy + entry.substring(matcher.end(1));
+    }
+
+    private static String replaceCount(String compound, int count) {
+        Matcher matcher = COUNT_PATTERN.matcher(compound);
+        if (matcher.find()) {
+            return matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + count));
+        }
+
+        int end = compound.lastIndexOf('}');
+        return end < 0 ? compound : compound.substring(0, end) + ",count:" + count + compound.substring(end);
     }
 
     private static Optional<String> replaceEntry(String content, int tradeIndex, EntryEditor editor) throws IOException {
@@ -684,8 +904,20 @@ public final class WanderingTradesDatapackManager {
         }
 
         List<ProvideTradeRange> providerRanges = provideTradeRanges(root, target);
+        Optional<ProvideTradeRange> fullRangeProvider = fullRangeProvider(providerRanges);
+        if (fullRangeProvider.isPresent()) {
+            updateProvideTradeRange(fullRangeProvider.get(), fullTradeIndexRange(tradeIndexes));
+            if (providerRanges.size() == 1) {
+                return;
+            }
+        }
+
         for (int i = 0; i < providerRanges.size(); i++) {
             ProvideTradeRange providerRange = providerRanges.get(i);
+            if (fullRangeProvider.filter(providerRange::equals).isPresent()) {
+                continue;
+            }
+
             int upperExclusive = i + 1 < providerRanges.size()
                     ? providerRanges.get(i + 1).lower()
                     : Integer.MAX_VALUE;
@@ -720,6 +952,10 @@ public final class WanderingTradesDatapackManager {
     }
 
     private static boolean isAvailableTradeIndex(int tradeIndex, List<ProvideTradeRange> providerRanges) {
+        if (fullRangeProvider(providerRanges).isPresent()) {
+            return true;
+        }
+
         for (ProvideTradeRange providerRange : providerRanges) {
             if (tradeIndex >= providerRange.lower() && tradeIndex <= providerRange.upper()) {
                 return true;
@@ -741,6 +977,7 @@ public final class WanderingTradesDatapackManager {
             if (matcher.find()) {
                 return Optional.of(new ProvideTradeRange(
                         provideFile,
+                        functionName,
                         content,
                         Integer.parseInt(matcher.group(2)),
                         Integer.parseInt(matcher.group(3))
@@ -807,6 +1044,20 @@ public final class WanderingTradesDatapackManager {
         return min == Integer.MAX_VALUE ? Optional.empty() : Optional.of(new TradeIndexRange(min, max));
     }
 
+    private static TradeIndexRange fullTradeIndexRange(List<Integer> sortedIndexes) {
+        return new TradeIndexRange(sortedIndexes.get(0), sortedIndexes.get(sortedIndexes.size() - 1));
+    }
+
+    private static Optional<ProvideTradeRange> fullRangeProvider(List<ProvideTradeRange> providerRanges) {
+        if (providerRanges.size() == 1) {
+            return Optional.of(providerRanges.get(0));
+        }
+
+        return providerRanges.stream()
+                .filter(providerRange -> PROVIDE_HERMIT_TRADES.equals(providerRange.functionName()))
+                .findFirst();
+    }
+
     private static void updateProvideTradeRange(ProvideTradeRange providerRange, TradeIndexRange tradeIndexRange) throws IOException {
         if (providerRange.lower() == tradeIndexRange.min() && providerRange.upper() == tradeIndexRange.max()) {
             return;
@@ -817,6 +1068,97 @@ public final class WanderingTradesDatapackManager {
             String updated = matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + tradeIndexRange.min() + ".." + tradeIndexRange.max()));
             writeString(providerRange.file(), updated);
         }
+    }
+
+    private static Optional<CustomHeadCountRange> findCustomHeadCountRange(Path root, String addTradeFunctionPath) {
+        List<CustomHeadCountRange> ranges = new ArrayList<>();
+
+        for (String functionPath : metadataFunctionCandidates(root, addTradeFunctionPath)) {
+            Path file = resolve(root, functionPath);
+            if (!Files.isRegularFile(file)) {
+                continue;
+            }
+
+            try {
+                String content = Files.readString(file, StandardCharsets.UTF_8);
+                Matcher matcher = ANY_RANDOM_RANGE_PATTERN.matcher(content);
+                while (matcher.find()) {
+                    String line = matcher.group();
+                    if (line.contains("wt_tradeIndex")) {
+                        continue;
+                    }
+
+                    int score = metadataRangeScore(functionPath, line);
+                    ranges.add(new CustomHeadCountRange(
+                            file,
+                            content,
+                            matcher.start(2),
+                            matcher.end(3),
+                            Integer.parseInt(matcher.group(2)),
+                            Integer.parseInt(matcher.group(3)),
+                            score
+                    ));
+                }
+            } catch (IOException ignored) {
+            }
+        }
+
+        return ranges.stream()
+                .filter(range -> range.score() > 0 || ranges.size() == 1)
+                .max(Comparator.comparingInt(CustomHeadCountRange::score));
+    }
+
+    private static List<String> metadataFunctionCandidates(Path root, String addTradeFunctionPath) {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        candidates.add(addTradeFunctionPath);
+
+        Path searchRoot = resolve(root, "data/wandering_trades");
+        if (Files.isDirectory(searchRoot)) {
+            try (var stream = Files.walk(searchRoot, 8)) {
+                stream.filter(Files::isRegularFile)
+                        .map(path -> toRelativeString(root, path))
+                        .filter(path -> path.endsWith(".mcfunction"))
+                        .forEach(candidates::add);
+            } catch (IOException ignored) {
+            }
+        }
+
+        return List.copyOf(candidates);
+    }
+
+    private static int metadataRangeScore(String functionPath, String line) {
+        int score = 0;
+        String normalizedPath = functionPath.toLowerCase(Locale.ROOT);
+        String normalizedLine = line.toLowerCase(Locale.ROOT);
+
+        if (SETTING_CONTEXT_PATTERN.matcher(normalizedLine).find()) {
+            score += 4;
+        }
+        if (normalizedLine.contains("custom")) {
+            score += 3;
+        }
+        if (normalizedLine.contains("head")) {
+            score += 2;
+        }
+        if (normalizedPath.contains("custom")) {
+            score += 2;
+        }
+        if (normalizedPath.contains("head")) {
+            score += 1;
+        }
+        if (normalizedPath.contains("provide") || normalizedPath.contains("trade")) {
+            score += 1;
+        }
+
+        return score;
+    }
+
+    private static String replaceRandomRange(CustomHeadCountRange range, int newMin, int newMax) {
+        return range.content().substring(0, range.rangeStart())
+                + newMin
+                + ".."
+                + newMax
+                + range.content().substring(range.rangeEnd());
     }
 
     private static String cleanName(String value) {
@@ -869,15 +1211,23 @@ public final class WanderingTradesDatapackManager {
     private record EditableFunction(Path pack, String functionPath) {
     }
 
-    private record ProvideTradeRange(Path file, String content, int lower, int upper) {
+    private record ProvideTradeRange(Path file, String functionName, String content, int lower, int upper) {
     }
 
     private record TradeIndexRange(int min, int max) {
     }
 
+    private record CustomHeadCountRange(Path file, String content, int rangeStart, int rangeEnd, int min, int max, int score) {
+    }
+
     @FunctionalInterface
     private interface PackEdit {
         boolean apply(Path root) throws IOException;
+    }
+
+    @FunctionalInterface
+    private interface PackReader<T> {
+        T read(Path root) throws IOException;
     }
 
     @FunctionalInterface

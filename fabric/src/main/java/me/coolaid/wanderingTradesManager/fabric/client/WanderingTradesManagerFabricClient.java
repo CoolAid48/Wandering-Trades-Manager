@@ -1,7 +1,7 @@
 package me.coolaid.wanderingTradesManager.fabric.client;
 
 import com.mojang.blaze3d.platform.InputConstants;
-import me.coolaid.wanderingTradesManager.client.gui.WanderingTradesHeadsScreen;
+import me.coolaid.wanderingTradesManager.client.gui.HeadsScreen;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
@@ -20,7 +20,7 @@ public final class WanderingTradesManagerFabricClient implements ClientModInitia
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (OPEN_HEADS_MANAGER.consumeClick()) {
                 if (client.player != null && client.screen == null) {
-                    client.setScreen(new WanderingTradesHeadsScreen(null));
+                    client.setScreen(new HeadsScreen(null));
                 }
             }
         });

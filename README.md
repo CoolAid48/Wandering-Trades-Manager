@@ -1,6 +1,6 @@
 # CoolAid's Wandering Trades Manager
 ![](https://img.shields.io/badge/Loaders-Fabric/Quilt/NeoForge-orange?style=for-the-badge)
-![](https://img.shields.io/badge/Versions-26.1.x-orange?style=for-the-badge)
+![](https://img.shields.io/badge/Versions-26.1.x_|_26.2.x-orange?style=for-the-badge)
 ![](https://img.shields.io/badge/Environments-Client-orange?style=for-the-badge)
 
 ### Adds a config screen to manage your VT Wandering Trades datapack in-game!
@@ -9,9 +9,9 @@
 ## More Details Below:
 - **Edit [Vanilla Tweaks](https://vanillatweaks.net/) Wandering Trades (and "Hermits Edition") packs, in both .zip or folder formats**
 - **Features an in-game screen to manage a wandering trader's custom trades**
+- **Includes a config screen for trade metadata, grid layout, edit warnings, and chat message toggles**
 - **Add, remove, and edit custom head trades directly through the manager**
 - **You can browse, search, sort, and filter mini/custom head trades**
-- **Additional features, proper documentation, and multiplayer testing coming soon™**
 
 #### For any issues or feature requests, please make a report on [GitHub](https://github.com/CoolAid48/Wandering-Trades-Manager/issues)
 

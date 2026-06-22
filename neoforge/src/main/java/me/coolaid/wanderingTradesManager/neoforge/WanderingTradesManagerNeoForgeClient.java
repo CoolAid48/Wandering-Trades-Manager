@@ -2,7 +2,7 @@ package me.coolaid.wanderingTradesManager.neoforge;
 
 import com.mojang.blaze3d.platform.InputConstants;
 import me.coolaid.wanderingTradesManager.WanderingTradesManager;
-import me.coolaid.wanderingTradesManager.client.gui.WanderingTradesHeadsScreen;
+import me.coolaid.wanderingTradesManager.client.gui.HeadsScreen;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
@@ -35,7 +35,7 @@ public final class WanderingTradesManagerNeoForgeClient {
 
         while (OPEN_HEADS_MANAGER.consumeClick()) {
             if (minecraft.player != null && minecraft.screen == null) {
-                minecraft.setScreen(new WanderingTradesHeadsScreen(null));
+                minecraft.setScreen(new HeadsScreen(null));
             }
         }
     }

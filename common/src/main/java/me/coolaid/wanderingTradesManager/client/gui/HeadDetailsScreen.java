@@ -94,7 +94,7 @@ public final class HeadDetailsScreen extends Screen {
             this.addRenderableWidget(this.deleteButton);
         }
 
-        this.doneButton = Button.builder(Component.translatable("button.wanderingtradesmanager.done"), button -> this.minecraft.setScreen(this.parent))
+        this.doneButton = Button.builder(Component.translatable("button.wanderingtradesmanager.done"), button -> this.minecraft.setScreenAndShow(this.parent))
                 .bounds(layout.buttonX(), layout.doneButtonY(), layout.buttonWidth(), BUTTON_HEIGHT)
                 .build();
         this.addRenderableWidget(this.doneButton);
@@ -110,7 +110,7 @@ public final class HeadDetailsScreen extends Screen {
 
     @Override
     public void onClose() {
-        this.minecraft.setScreen(this.parent);
+        this.minecraft.setScreenAndShow(this.parent);
     }
 
     @Override
@@ -307,7 +307,7 @@ public final class HeadDetailsScreen extends Screen {
         }
 
         if (WorldConfig.removeHeadWarningEnabled()) {
-            this.minecraft.setScreen(new RemoveHeadConfirmScreen(this));
+            this.minecraft.setScreenAndShow(new RemoveHeadConfirmScreen(this));
             return;
         }
 
@@ -360,7 +360,7 @@ public final class HeadDetailsScreen extends Screen {
         notifyPlayer(result.message(), result.failed());
         if (result.changed()) {
             this.parent.reloadHeadsFromChild();
-            this.minecraft.setScreen(this.parent);
+            this.minecraft.setScreenAndShow(this.parent);
         }
     }
 
@@ -386,7 +386,7 @@ public final class HeadDetailsScreen extends Screen {
         }
 
         this.parent.showTemporaryEmptyMessage(message);
-        this.minecraft.setScreen(this.parent);
+        this.minecraft.setScreenAndShow(this.parent);
     }
 
     private static Component green(String translationKey) {

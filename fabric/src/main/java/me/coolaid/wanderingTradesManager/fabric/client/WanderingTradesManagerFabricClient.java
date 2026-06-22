@@ -19,8 +19,8 @@ public final class WanderingTradesManagerFabricClient implements ClientModInitia
     public void onInitializeClient() {
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (OPEN_HEADS_MANAGER.consumeClick()) {
-                if (client.player != null && client.screen == null) {
-                    client.setScreen(new HeadsScreen(null));
+                if (client.player != null && client.gui.screen() == null) {
+                    client.setScreenAndShow(new HeadsScreen(null));
                 }
             }
         });

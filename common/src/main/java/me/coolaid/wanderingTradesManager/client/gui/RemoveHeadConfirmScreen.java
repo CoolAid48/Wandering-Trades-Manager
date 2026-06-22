@@ -42,7 +42,7 @@ public final class RemoveHeadConfirmScreen extends Screen {
                 .build();
         this.addRenderableWidget(this.removeButton);
 
-        this.cancelButton = Button.builder(Component.translatable("button.wanderingtradesmanager.cancel"), button -> this.minecraft.setScreen(this.parent))
+        this.cancelButton = Button.builder(Component.translatable("button.wanderingtradesmanager.cancel"), button -> this.minecraft.setScreenAndShow(this.parent))
                 .bounds(0, 0, BUTTON_WIDTH, BUTTON_HEIGHT)
                 .build();
         this.addRenderableWidget(this.cancelButton);
@@ -57,7 +57,7 @@ public final class RemoveHeadConfirmScreen extends Screen {
 
     @Override
     public void onClose() {
-        this.minecraft.setScreen(this.parent);
+        this.minecraft.setScreenAndShow(this.parent);
     }
 
     @Override

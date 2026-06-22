@@ -255,7 +255,7 @@ public final class ConfigScreen extends Screen {
     }
 
     private void openHeadsManager() {
-        this.minecraft.setScreen(new HeadsScreen(this.parent));
+        this.minecraft.setScreenAndShow(new HeadsScreen(this.parent));
     }
 
     private EditBox numericField(String labelKey, int value) {

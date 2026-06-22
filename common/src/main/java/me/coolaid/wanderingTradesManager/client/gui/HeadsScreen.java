@@ -145,7 +145,7 @@ public final class HeadsScreen extends Screen {
 
     @Override
     public void onClose() {
-        this.minecraft.setScreen(this.parent);
+        this.minecraft.setScreenAndShow(this.parent);
     }
 
     @Override
@@ -519,11 +519,11 @@ public final class HeadsScreen extends Screen {
             return;
         }
 
-        this.minecraft.setScreen(new ConfigScreen(this.parent));
+        this.minecraft.setScreenAndShow(new ConfigScreen(this.parent));
     }
 
     private void openDetails(CustomHead head) {
-        this.minecraft.setScreen(new HeadDetailsScreen(this, head));
+        this.minecraft.setScreenAndShow(new HeadDetailsScreen(this, head));
     }
 
     private void openNewHead() {
@@ -532,7 +532,7 @@ public final class HeadsScreen extends Screen {
             return;
         }
 
-        this.minecraft.setScreen(new HeadDetailsScreen(this, null));
+        this.minecraft.setScreenAndShow(new HeadDetailsScreen(this, null));
     }
 
     private void openDatapacksFolder() {

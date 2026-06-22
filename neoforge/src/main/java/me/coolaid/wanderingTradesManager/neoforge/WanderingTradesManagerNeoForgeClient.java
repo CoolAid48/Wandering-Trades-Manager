@@ -34,8 +34,8 @@ public final class WanderingTradesManagerNeoForgeClient {
         Minecraft minecraft = Minecraft.getInstance();
 
         while (OPEN_HEADS_MANAGER.consumeClick()) {
-            if (minecraft.player != null && minecraft.screen == null) {
-                minecraft.setScreen(new HeadsScreen(null));
+            if (minecraft.player != null && minecraft.gui.screen() == null) {
+                minecraft.setScreenAndShow(new HeadsScreen(null));
             }
         }
     }

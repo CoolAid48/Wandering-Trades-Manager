@@ -4,9 +4,8 @@
 ![](https://img.shields.io/badge/Environments-Client-orange?style=for-the-badge)
 
 ### Adds a config screen to manage your VT Wandering Trades datapack in-game!
-#### DISCLAIMER: Wandering Trades Manager is not affiliated with the Vanilla Tweaks team. This mod requires the Wandering Trades pack from Vanilla Tweaks, and does nothing without the datapack loaded in your world! Check out Vanilla Tweaks: https://vanillatweaks.net/
+#### DISCLAIMER: Wandering Trades Manager is not affiliated with the Vanilla Tweaks team. This mod requires the Wandering Trades pack from Vanilla Tweaks, and does nothing without the datapack loaded in your world! Check out Vanilla Tweaks: https://vanillatweaks.net/ 
 
-## More Details Below:
 - **Edit [Vanilla Tweaks](https://vanillatweaks.net/) Wandering Trades (and "Hermits Edition") packs, in both .zip or folder formats**
 - **Features an in-game screen to manage a wandering trader's custom trades**
 - **Includes a config screen for trade metadata, grid layout, edit warnings, and chat message toggles**
@@ -24,3 +23,6 @@ Probably not, but maybe. If it's requested then I'm more likely to get around to
 
 ### Does it work on dedicated servers?
 Proper multiplayer compatibility is not fully tested. For servers, this mod is really only useful to admins and has no purpose to players that cannot access the server files.
+
+## Looking for a server host?
+![server hosting partner](https://cdn.modrinth.com/data/cached_images/8e85210a65b7c17998987c57b7571ba2fbd19bfb.png)

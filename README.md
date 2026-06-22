@@ -24,3 +24,6 @@ Probably not, but maybe. If it's requested then I'm more likely to get around to
 
 ### Does it work on dedicated servers?
 Proper multiplayer compatibility is not fully tested. For servers, this mod is really only useful to admins and has no purpose to players that cannot access the server files.
+
+## Looking for a server host?
+![server hosting partner](https://cdn.modrinth.com/data/cached_images/8e85210a65b7c17998987c57b7571ba2fbd19bfb.png)
